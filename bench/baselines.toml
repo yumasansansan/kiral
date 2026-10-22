@@ -278,6 +278,24 @@ conversions = { p50 = 2.1 }
 
 [[replay]]
 system = "KIRAL's engine: the dictionary's drafts (mozc-sudachi) refined by zenz-v3.1-small in integers (its model file) on a worker, a round a key, a kana every 100 ms; Space waits 30 ms for up to 8 rounds"
+source = "kiral-tools replay --model --dict --limit 50, 2026-10-23, two runs, on AC power (energy preference performance), the package at 87 to 91 C as the runs began"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "P, typing on CPU 0, 1.67 and 1.59 GHz at the median; the worker on CPU 2, pinned, 3.20 and 2.69 GHz at the median"
+kana = { count = 1435, p50 = [0.139, 0.139], p99 = [0.439, 0.468] }
+refinements = { count = [1435, 1435], p50 = [16.36, 15.104], p99 = [51.916, 52.977] }
+conversions = { count = 50, refined = 50, p50 = [0.59, 0.482], p99 = [28.508, 28.593], correct = [42, 42] }
+
+[[replay]]
+system = "KIRAL's engine: the dictionary's drafts (mozc-sudachi) refined by zenz-v3.1-small in integers (its model file) on a worker, a round a key, a kana every 100 ms; Space waits 30 ms for up to 8 rounds"
+source = "kiral-tools replay --model --dict --limit 50, 2026-10-23, two runs, on AC power (energy preference performance), the package at 87 to 91 C as the runs began"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "E, typing on CPU 8, 2.57 and 3.23 GHz at the median; the worker on CPU 9, pinned, 3.70 and 3.69 GHz at the median"
+kana = { count = 1435, p50 = [0.182, 0.186], p99 = [0.724, 0.694] }
+refinements = { count = [1236, 1243], p50 = [39.48, 39.787], p99 = [97.701, 98.19] }
+conversions = { count = 50, refined = 38, p50 = [0.707, 0.714], p99 = [30.107, 30.109], correct = [39, 39] }
+
+[[replay]]
+system = "KIRAL's engine: the dictionary's drafts (mozc-sudachi) refined by zenz-v3.1-small in integers (its model file) on a worker, a round a key, a kana every 100 ms; Space waits 30 ms for up to 8 rounds"
 source = "kiral-tools replay --model --dict --limit 50, 2026-10-23, two runs, on battery (energy preference balance_power)"
 machine = "Intel Core i7-1360P, Ubuntu 26.10"
 core = "P, typing on CPU 0, 0.46 and 0.43 GHz at the median; the worker on CPU 2, pinned, 1.80 GHz at the median of both"
