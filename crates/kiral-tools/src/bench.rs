@@ -8,6 +8,12 @@
 
 //! `kiral-tools bench`: the time of KIRAL's computations, pinned.
 //!
+//! `bench kernels` times the products in integers of zenz's layers, in each
+//! form of the kernels asked for, on random weights and inputs: for each
+//! number of rows, the median of many calls, and the multiply-adds a second.
+//! A layer's weights, at most 4.6 MB, stay in the caches between the calls,
+//! so that the times are the kernel's own, not the memory's.
+//!
 //! `bench model` converts AJIMEE-Bench's readings with zenz alone, greedily, as
 //! `eval` does, one item after another on one thread pinned to each processor
 //! asked for, and times each prompt -- its tokens fed at once, as a new
@@ -20,7 +26,10 @@ use std::ffi::OsString;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
+use kiral_cpu::Features;
 use kiral_cpu::topology::{self, Topology};
+use kiral_kernels::Form;
+use kiral_kernels::quantized::{self, Packed, Rotation, Rows, Scheme};
 use kiral_kernels::vector::argmax;
 use kiral_nn::gpt2::{Precision, Session};
 use kiral_nn::zenz::{Zenz, prompt, tag_in};
@@ -31,7 +40,19 @@ use crate::eval::{limit, precision_name, scheme_of};
 use crate::pinned::{place, print_times, processors, run_on};
 
 const USAGE: &str = "\
-usage: kiral-tools bench model --model <directory> [options]
+usage: kiral-tools bench kernels [options]
+       kiral-tools bench model --model <directory> [options]
+
+The time of the products in integers of zenz's layers -- 768 inputs to 2304, to
+768, to 3072 and to 6000 outputs, and 3072 to 768 -- on random weights and
+inputs, in each form of the kernels asked for: for each number of rows, the
+median of repeated calls and the multiply-adds a second.
+
+  --forms <names>       the forms, separated by commas [every one this
+                        processor runs]
+  --rows <numbers>      the numbers of rows, separated by commas [1,4,16,40]
+  --cpu <processor>     a processor to pin the run to, again for another run
+
 
 The time zenz takes to convert AJIMEE-Bench's readings greedily, one item after
 another on one thread: each prompt fed at once, and each step of decoding after
@@ -55,6 +76,7 @@ for, with the clock it ran at.
 pub fn main(mut arguments: impl Iterator<Item = OsString>) -> ExitCode {
     let what = arguments.next().map(|what| what.to_string_lossy().into_owned());
     let result = match what.as_deref() {
+        Some("kernels") => kernels(arguments),
         Some("model") => model(arguments),
         Some("help" | "--help") => {
             println!("{USAGE}");
@@ -188,4 +210,119 @@ fn convert(
         times.steps.push(started.elapsed());
     }
     Ok(())
+}
+
+/// zenz's layers: inputs and outputs.
+const LAYERS: [(usize, usize); 5] = [(768, 2304), (768, 768), (768, 3072), (3072, 768), (768, 6000)];
+
+fn kernels(arguments: impl Iterator<Item = OsString>) -> Result<(), String> {
+    let options = arguments::parse(arguments, &["forms", "rows"], &["cpu"], &["help"])
+        .map_err(|message| format!("{message}\n\n{USAGE}"))?;
+    if options.flag("help") {
+        println!("{USAGE}");
+        return Ok(());
+    }
+    let available = Form::available(Features::detect());
+    let forms = match options.text("forms") {
+        None => available.clone(),
+        Some(names) => names
+            .split(',')
+            .map(|name| {
+                let form = Form::from_name(name.trim()).ok_or_else(|| format!("--forms: no form {name}"))?;
+                if available.contains(&form) {
+                    Ok(form)
+                } else {
+                    Err(format!("--forms: this processor does not run {form}"))
+                }
+            })
+            .collect::<Result<Vec<_>, String>>()?,
+    };
+    let rows = match options.text("rows") {
+        None => vec![1, 4, 16, 40],
+        Some(numbers) => numbers
+            .split(',')
+            .map(|number| {
+                number
+                    .trim()
+                    .parse::<usize>()
+                    .ok()
+                    .filter(|&rows| rows > 0)
+                    .ok_or_else(|| format!("--rows: {number} is not a number of rows"))
+            })
+            .collect::<Result<Vec<_>, String>>()?,
+    };
+    let topology = Topology::detect();
+    let name = topology::processor_name().unwrap_or_else(|| std::env::consts::ARCH.to_owned());
+    println!(
+        "bench kernels: the products in integers of zenz's layers, weights of 8 bits; {name}; forms {}",
+        forms.iter().map(|form| form.name()).collect::<Vec<_>>().join(", ")
+    );
+    for processor in processors(&options, &topology)? {
+        let (lines, clock) = run_on(processor, || Ok(time_kernels(&forms, &rows)))?;
+        println!("  {}", place(&topology, processor, &clock));
+        for line in lines {
+            println!("    {line}");
+        }
+    }
+    Ok(())
+}
+
+/// Times each layer at each number of rows in each form; returns a line for
+/// each.
+fn time_kernels(forms: &[Form], rows: &[usize]) -> Vec<String> {
+    let mut random = 0x853c_49e6_748f_ea9b_u64;
+    let mut values = |count: usize| -> Vec<f32> {
+        (0..count)
+            .map(|_| {
+                random = random
+                    .wrapping_mul(6_364_136_223_846_793_005)
+                    .wrapping_add(1_442_695_040_888_963_407);
+                f32::from(u16::try_from(random >> 48).unwrap_or(0)) / 32_768.0 - 1.0
+            })
+            .collect()
+    };
+    let mut lines = Vec::new();
+    for (depth, width) in LAYERS {
+        let weights = values(depth * width);
+        let packed = Packed::quantize(depth, width, Scheme::INT8, |k, j| weights[k * width + j]);
+        let bias = values(width);
+        for &count in rows {
+            let mut input = Rows::new();
+            input.quantize(&values(depth * count), depth, Rotation::None);
+            let mut output = vec![0.0f32; count * width];
+            let mut times = Vec::new();
+            for &form in forms {
+                times.push((
+                    form,
+                    median_call(|| quantized::linear_in(form, &input, &packed, &bias, &mut output)),
+                ));
+            }
+            let macs = f64::from(u32::try_from(depth * width * count).unwrap_or(u32::MAX));
+            let text = times
+                .iter()
+                .map(|(form, time)| {
+                    let seconds = time.as_secs_f64();
+                    format!("{form} {:.3} ms ({:.1} GMAC/s)", seconds * 1e3, macs / seconds / 1e9)
+                })
+                .collect::<Vec<_>>()
+                .join(", ");
+            lines.push(format!("{depth} to {width}, {count} rows: {text}"));
+        }
+    }
+    lines
+}
+
+/// The median time of a call, of as many as fill 0.2 s and at least 11, after
+/// one that warms the caches.
+fn median_call(mut call: impl FnMut()) -> Duration {
+    call();
+    let started = Instant::now();
+    let mut times = Vec::new();
+    while times.len() < 11 || started.elapsed() < Duration::from_millis(200) {
+        let begun = Instant::now();
+        call();
+        times.push(begun.elapsed());
+    }
+    times.sort_unstable();
+    times[times.len() / 2]
 }

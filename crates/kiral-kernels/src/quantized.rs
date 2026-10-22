@@ -55,7 +55,7 @@
 //! (`pmovsxbd` and `pmaddwd` on x86-64-v2), where adding the four within each
 //! quad would have it shuffle the weights first.
 
-use crate::multiply_add;
+use crate::{Form, multiply_add};
 
 /// The numbers of a sum that a scale holds for: sixteen quads.
 pub const GROUP: usize = 64;
@@ -320,15 +320,16 @@ fn hadamard(block: &mut [f32]) {
 }
 
 /// Rows of inputs quantized for [`linear`]: each row's groups of [`GROUP`]
-/// bytes in one piece, and for each group its scale and its offset.
+/// bytes in one piece, and each row's groups' scales and offsets, a group's
+/// scale and offset side by side.
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct Rows {
     depth: usize,
     groups: usize,
     rotation: Option<usize>,
     bytes: Vec<u8>,
-    scales: Vec<f32>,
-    offsets: Vec<f32>,
+    /// Row by row, group by group, the scale and then the offset.
+    floats: Vec<f32>,
     /// A row rotated.
     rotated: Vec<f32>,
 }
@@ -362,8 +363,7 @@ impl Rows {
             Rotation::Hadamard(order) => Some(order),
         };
         self.bytes.resize(rows * groups * GROUP, 0);
-        self.scales.resize(rows * groups, 0.0);
-        self.offsets.resize(rows * groups, 0.0);
+        self.floats.resize(rows * groups * 2, 0.0);
         for (row, input) in input.chunks_exact(depth).enumerate() {
             let input = if let Some(order) = self.rotation {
                 self.rotated.clear();
@@ -377,7 +377,9 @@ impl Rows {
                 let values = &input[group * GROUP..depth.min((group + 1) * GROUP)];
                 let at = row * groups + group;
                 let bytes = &mut self.bytes[at * GROUP..][..GROUP];
-                (self.scales[at], self.offsets[at]) = quantize_group(values, bytes);
+                let (scale, offset) = quantize_group(values, bytes);
+                self.floats[2 * at] = scale;
+                self.floats[2 * at + 1] = offset;
             }
         }
     }
@@ -391,13 +393,13 @@ impl Rows {
     /// The rows held.
     #[must_use]
     pub fn len(&self) -> usize {
-        self.scales.len().checked_div(self.groups).unwrap_or(0)
+        self.floats.len().checked_div(2 * self.groups).unwrap_or(0)
     }
 
     /// Whether no rows are held.
     #[must_use]
     pub fn is_empty(&self) -> bool {
-        self.scales.is_empty()
+        self.floats.is_empty()
     }
 
     /// The inputs of a row.
@@ -412,16 +414,26 @@ impl Rows {
         &self.bytes
     }
 
-    /// The scale of each row's group, a row's groups one after another.
+    /// The scale of a row's group.
+    ///
+    /// # Panics
+    ///
+    /// Where the row or the group is not held.
     #[must_use]
-    pub fn scales(&self) -> &[f32] {
-        &self.scales
+    pub fn scale(&self, row: usize, group: usize) -> f32 {
+        assert!(group < self.groups, "group {group} of {}", self.groups);
+        self.floats[2 * (row * self.groups + group)]
     }
 
-    /// The offset of each row's group, its scale times its zero point.
+    /// The offset of a row's group: its scale times its zero point.
+    ///
+    /// # Panics
+    ///
+    /// Where the row or the group is not held.
     #[must_use]
-    pub fn offsets(&self) -> &[f32] {
-        &self.offsets
+    pub fn offset(&self, row: usize, group: usize) -> f32 {
+        assert!(group < self.groups, "group {group} of {}", self.groups);
+        self.floats[2 * (row * self.groups + group) + 1]
     }
 }
 
@@ -456,21 +468,29 @@ fn quantize_group(values: &[f32], bytes: &mut [u8]) -> (f32, f32) {
     (scale, scale * zero)
 }
 
-/// `output = input weight + bias`, row by row.
+/// `output = input weight + bias`, row by row, by the form of the kernels in
+/// effect ([`crate::form`]).
 ///
 /// `input` holds rows of the layer's depth, `bias` a value for each of its
 /// outputs, and `output` a row of them for each row of `input`.
 ///
 /// # Panics
 ///
-/// Where the lengths do not fit the layer's.
+/// Where the lengths do not fit the layer's, or the inputs were rotated
+/// otherwise than the weights.
 pub fn linear(input: &Rows, weight: &Packed, bias: &[f32], output: &mut [f32]) {
+    linear_in(crate::form(), input, weight, bias, output);
+}
+
+/// `output = input weight + bias`, row by row, by a form of the kernels.
+///
+/// # Panics
+///
+/// As [`linear`]; and where the form is one this build or this processor has
+/// not got.
+pub fn linear_in(form: Form, input: &Rows, weight: &Packed, bias: &[f32], output: &mut [f32]) {
     let Packed {
-        depth,
-        width,
-        groups,
-        scheme,
-        ref bytes,
+        depth, width, scheme, ..
     } = *weight;
     assert_eq!(input.depth, depth, "inputs of another depth than the layer's {depth}");
     assert_eq!(
@@ -485,6 +505,25 @@ pub fn linear(input: &Rows, weight: &Packed, bias: &[f32], output: &mut [f32]) {
         rows * width,
         "an output that is not {rows} rows of {width}"
     );
+    match form {
+        Form::Portable => portable(input, weight, bias, output),
+        #[cfg(target_arch = "x86_64")]
+        Form::AvxVnni => avx_vnni(input, weight, bias, output),
+        #[cfg(not(target_arch = "x86_64"))]
+        Form::AvxVnni => panic!("the AVX-VNNI kernels on another architecture than x86-64"),
+    }
+}
+
+/// The portable form of [`linear`]: strips of [`STRIP`] columns, a row at a
+/// time.
+fn portable(input: &Rows, weight: &Packed, bias: &[f32], output: &mut [f32]) {
+    let Packed {
+        width,
+        groups,
+        ref bytes,
+        ..
+    } = *weight;
+    let rows = input.len();
     let row_bytes = groups * GROUP;
     for (panel, panel_bytes) in bytes.chunks_exact(groups * GROUP_BYTES).enumerate() {
         for strip in (0..PANEL).step_by(STRIP) {
@@ -497,8 +536,7 @@ pub fn linear(input: &Rows, weight: &Packed, bias: &[f32], output: &mut [f32]) {
             first[..columns].copy_from_slice(&bias[column..][..columns]);
             let tile_of = |row: usize, take: usize| Tile {
                 bytes: &input.bytes[row * row_bytes..][..take * row_bytes],
-                scales: &input.scales[row * groups..][..take * groups],
-                offsets: &input.offsets[row * groups..][..take * groups],
+                floats: &input.floats[row * groups * 2..][..take * groups * 2],
                 groups,
             };
             let mut store = |row: usize, sums: &[[f32; STRIP]]| {
@@ -518,18 +556,61 @@ pub fn linear(input: &Rows, weight: &Packed, bias: &[f32], output: &mut [f32]) {
     }
 }
 
+/// The AVX-VNNI form of [`linear`]: tiles of up to six rows by a panel's
+/// sixteen columns, each started from the bias in a tile of its own, summed by
+/// the kernel, then copied into the output.
+#[cfg(target_arch = "x86_64")]
+fn avx_vnni(input: &Rows, weight: &Packed, bias: &[f32], output: &mut [f32]) {
+    use crate::x86_64::{AVX_VNNI_ROWS, qgemm_avx_vnni};
+    let Packed {
+        width,
+        groups,
+        ref bytes,
+        ..
+    } = *weight;
+    let rows = input.len();
+    let row_bytes = groups * GROUP;
+    let mut tile = [[0.0f32; PANEL]; AVX_VNNI_ROWS];
+    for (panel, panel_bytes) in bytes.chunks_exact(groups * GROUP_BYTES).enumerate() {
+        let column = panel * PANEL;
+        let columns = PANEL.min(width - column);
+        let mut row = 0;
+        while row < rows {
+            let take = AVX_VNNI_ROWS.min(rows - row);
+            for sums in &mut tile[..take] {
+                sums[..columns].copy_from_slice(&bias[column..][..columns]);
+                sums[columns..].fill(0.0);
+            }
+            qgemm_avx_vnni(
+                take,
+                groups,
+                &input.bytes[row * row_bytes..][..take * row_bytes],
+                &input.floats[row * groups * 2..][..take * groups * 2],
+                panel_bytes,
+                &mut tile,
+            );
+            for (r, sums) in tile[..take].iter().enumerate() {
+                output[(row + r) * width + column..][..columns].copy_from_slice(&sums[..columns]);
+            }
+            row += take;
+        }
+    }
+}
+
 /// The quantized rows a tile takes.
 #[derive(Debug, Clone, Copy)]
 struct Tile<'a> {
     bytes: &'a [u8],
-    scales: &'a [f32],
-    offsets: &'a [f32],
+    floats: &'a [f32],
     groups: usize,
 }
 
 /// The sums of `R` rows with the [`STRIP`] columns of a panel from `strip`,
-/// from `first`: the tile's values of the output.
-#[inline]
+/// from `first`: the tile's values of the output. Not inlined: inlined into its
+/// caller, it was vectorized along the quads instead, its bytes gathered one at
+/// a time, and a row of a layer of 768 by 3072 took 0.43 ms on a P-core
+/// against 0.26.
+#[inline(never)]
 fn tile<const R: usize>(a: &Tile<'_>, panel: &[u8], strip: usize, first: &[f32; STRIP]) -> [[f32; STRIP]; R] {
     let mut sums = [*first; R];
     let row_bytes = a.groups * GROUP;
@@ -552,8 +633,8 @@ fn tile<const R: usize>(a: &Tile<'_>, panel: &[u8], strip: usize, first: &[f32; 
         let scales = floats_of(scales);
         let offsets = floats_of(offsets);
         for (r, (sums, lanes)) in sums.iter_mut().zip(&lanes).enumerate() {
-            let scale = a.scales[r * a.groups + group];
-            let offset = a.offsets[r * a.groups + group];
+            let scale = a.floats[2 * (r * a.groups + group)];
+            let offset = a.floats[2 * (r * a.groups + group) + 1];
             for (((sum, lanes), &weight_scale), &weight_offset) in
                 sums.iter_mut().zip(lanes).zip(&scales[strip..]).zip(&offsets[strip..])
             {

@@ -17,6 +17,11 @@
 # the median and the 99th percentile, by the nearest rank, on one pinned core,
 # with the median of the clock read while it ran.
 #
+# `kernels` keeps the multiply-adds a second, in billions, of the products in
+# integers of zenz's five layers (`kiral-tools bench kernels`), their weights in
+# the caches: the least and the most over the layers and the runs, for each
+# number of rows and each form.
+#
 # `agree` keeps how many of the positions of single precision's conversions of
 # AJIMEE-Bench's items have, in a quantized model, the likeliest next token that
 # single precision has there (`kiral-tools agree`), and `model` the time zenz
@@ -292,3 +297,35 @@ machine = "Intel Core i7-1360P, Ubuntu 26.10"
 core = "E, CPU 8, pinned, 3.70 GHz at the median"
 prompts = { count = 50, tokens_p50 = 37, p50 = [488.053, 486.154], p99 = [1401.636, 1399.394] }
 steps = { count = 1051, p50 = [21.298, 23.248], p99 = [24.193, 25.351] }
+
+[[model]]
+system = "zenz-v3.1-small alone in integers (--int8), the AVX-VNNI form"
+source = "kiral-tools bench model --limit 50, 2026-10-23, two runs"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "P, CPU 0, pinned, 4.96 GHz at the median of both"
+prompts = { count = 50, tokens_p50 = 37, p50 = [27.447, 27.334], p99 = [82.001, 80.844] }
+steps = { count = 1051, p50 = [5.527, 5.389], p99 = [6.766, 6.335] }
+
+[[model]]
+system = "zenz-v3.1-small alone in integers (--int8), the AVX-VNNI form"
+source = "kiral-tools bench model --limit 50, 2026-10-23, two runs"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "E, CPU 8, pinned, 3.70 GHz at the median"
+prompts = { count = 50, tokens_p50 = 37, p50 = [88.476, 88.598], p99 = [266.285, 264.513] }
+steps = { count = 1051, p50 = [11.344, 10.717], p99 = [12.816, 12.234] }
+
+[[kernels]]
+system = "the products in integers of zenz's layers, weights of 8 bits"
+source = "kiral-tools bench kernels, 2026-10-23, two runs"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "P, CPU 0, pinned, 4.10 and 4.20 GHz at the median"
+avx_vnni = { rows_1 = [42.5, 107.9], rows_4 = [114.3, 185.8], rows_16 = [184.9, 199.5], rows_40 = [179.0, 204.6] }
+portable = { any_rows = [7.6, 9.6] }
+
+[[kernels]]
+system = "the products in integers of zenz's layers, weights of 8 bits"
+source = "kiral-tools bench kernels, 2026-10-23, two runs"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "E, CPU 8, pinned, 3.70 GHz at the median"
+avx_vnni = { rows_1 = [32.0, 44.8], rows_4 = [46.6, 48.0], rows_16 = [46.6, 47.7], rows_40 = [46.3, 47.9] }
+portable = { any_rows = [6.3, 6.7] }

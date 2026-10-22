@@ -13,6 +13,9 @@ version = "0.1.0"
 [[package]]
 name = "kiral-kernels"
 version = "0.1.0"
+dependencies = [
+ "kiral-cpu",
+]
 
 [[package]]
 name = "kiral-lattice"

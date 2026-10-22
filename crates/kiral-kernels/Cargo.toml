@@ -8,13 +8,16 @@
 
 [package]
 name = "kiral-kernels"
-description = "The kernels of KIRAL's networks, in plain Rust that the compiler turns into vector code"
+description = "The kernels of KIRAL's networks: in plain Rust that the compiler turns into vector code, and in assembly for the levels of the processor"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 repository.workspace = true
 publish.workspace = true
+
+[dependencies]
+kiral-cpu = { path = "../kiral-cpu" }
 
 [lints]
 workspace = true

@@ -28,7 +28,7 @@ use std::process::ExitCode;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
-use kiral_cpu::{Choice, Features, Request};
+use kiral_cpu::Features;
 use kiral_dict::Dictionary;
 use kiral_kernels::quantized::{Rotation, Scheme};
 use kiral_lattice::Lattice;
@@ -384,11 +384,12 @@ pub fn precision_name(precision: Precision) -> String {
     }
 }
 
-/// The form of the kernels taken, for the log.
-fn kernels() -> String {
-    match Request::from_environment().map(|request| Choice::new(Features::detect(), request)) {
-        Ok(_) => "the portable form".to_owned(),
-        Err(error) => format!("the portable form ({error})"),
+/// The form of the kernels in effect, for the log: the form of the products in
+/// integers, the other kernels being portable alone for now.
+pub fn kernels() -> String {
+    match kiral_kernels::form_error() {
+        None => format!("the {} form", kiral_kernels::form()),
+        Some(error) => format!("the {} form ({error})", kiral_kernels::form()),
     }
 }
 

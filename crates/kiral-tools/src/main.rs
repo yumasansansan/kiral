@@ -10,8 +10,9 @@
 //!
 //! - `agree`: how faithful zenz's products in integers are to single
 //!   precision, by the most likely next token at each position.
-//! - `bench`: the time of KIRAL's computations, pinned: `bench model`, zenz's
-//!   prompts and steps of decoding.
+//! - `bench`: the time of KIRAL's computations, pinned: `bench kernels`, the
+//!   products in integers in each form; `bench model`, zenz's prompts and
+//!   steps of decoding.
 //! - `dict`: dictionary files, built from Mozc's open-source dictionary.
 //! - `eval`: the accuracy of a conversion against AJIMEE-Bench, and the items
 //!   it changed since the run before.
@@ -40,7 +41,7 @@ usage: kiral-tools <command> [options]
 
 commands:
   agree   zenz's products in integers against single precision (kiral-tools agree --help)
-  bench   the time of a computation, pinned: bench model (kiral-tools bench help)
+  bench   the time of a computation, pinned: bench kernels, bench model (kiral-tools bench help)
   dict    dictionary files: dict build (kiral-tools dict help)
   eval    the accuracy of a conversion against AJIMEE-Bench (kiral-tools eval --help)
   replay  the time of each key typed into an input method (kiral-tools replay --help)";

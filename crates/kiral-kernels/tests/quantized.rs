@@ -15,10 +15,14 @@
 //! magnitudes added, `n` the most roundings a term goes through; and against
 //! the products of the numbers before they were quantized, held to what the
 //! quantization's errors allow. Each under several schemes, at depths and
-//! widths that are not multiples of a group, a panel or a rotation.
+//! widths that are not multiples of a group, a panel or a rotation, and with
+//! every number of rows a tile of each form may take; the products in every
+//! form the processor runs.
 
+use kiral_cpu::Features;
+use kiral_kernels::Form;
 use kiral_kernels::quantized::{
-    GROUP, GROUP_BYTES, INPUT_MAX, PANEL, Packed, QUADS, Rotation, Rows, Scheme, linear, rotate,
+    GROUP, GROUP_BYTES, INPUT_MAX, PANEL, Packed, QUADS, Rotation, Rows, Scheme, linear, linear_in, rotate,
 };
 
 /// The unit roundoff of single precision, 2^-24.
@@ -290,7 +294,7 @@ fn inputs_are_their_groups_steps() {
                     let least = values.iter().copied().fold(0.0f32, f32::min);
                     let greatest = values.iter().copied().fold(0.0f32, f32::max);
                     let at = row * groups + group;
-                    let scale = rows.scales()[at];
+                    let scale = rows.scale(row, group);
                     assert_eq!(scale, (greatest - least) / INPUT_MAX);
                     // The zero point as the rule takes it: by the scale's inverse.
                     let zero = if scale > 0.0 {
@@ -299,7 +303,7 @@ fn inputs_are_their_groups_steps() {
                         0.0
                     };
                     assert_eq!(
-                        rows.offsets()[at],
+                        rows.offset(row, group),
                         scale * zero,
                         "the offset of row {row}'s group {group}"
                     );
@@ -344,12 +348,19 @@ fn exact(rows: &Rows, packed: &Packed, bias: &[f32], row: usize, j: usize) -> (f
         }
         let (_, weight_scale, weight_offset) = weight_of(packed, group * GROUP, j);
         let products = f64::from(i32::try_from(products).expect("a group's products"));
-        let scaled = f64::from(rows.scales()[at]) * f64::from(weight_scale) * products;
-        let offset = f64::from(rows.offsets()[at]) * f64::from(weight_offset);
+        let scaled = f64::from(rows.scale(row, group)) * f64::from(weight_scale) * products;
+        let offset = f64::from(rows.offset(row, group)) * f64::from(weight_offset);
         value += scaled - offset;
         magnitude += scaled.abs() + offset.abs();
     }
     (value, magnitude)
+}
+
+/// The forms of the kernels the processor runs, the portable first.
+fn forms() -> Vec<Form> {
+    let forms = Form::available(Features::detect());
+    assert_eq!(forms.first(), Some(&Form::Portable));
+    forms
 }
 
 #[test]
@@ -362,21 +373,24 @@ fn products_are_those_of_double_precision() {
             let packed = Packed::quantize(depth, width, scheme, |k, j| weights[k * width + j]);
             rows.quantize(&random.values(depth * count), depth, scheme.rotation);
             let bias = random.values(width);
-            let mut output = vec![f32::NAN; count * width];
-            linear(&rows, &packed, &bias, &mut output);
-            // A group's term goes through the product of the scales, its product
-            // with the sum and its addition, each rounded, and two more additions
-            // for each group after it; the bias through two for each group.
-            let n = 2 * depth.div_ceil(GROUP) + 3;
-            for row in 0..count {
-                for j in 0..width {
-                    let (value, magnitude) = exact(&rows, &packed, &bias, row, j);
-                    let error = (f64::from(output[row * width + j]) - value).abs();
-                    assert!(
-                        error <= gamma(n) * magnitude,
-                        "{scheme:?}, {depth}x{width}: row {row}, column {j} off by {error}, bound {}",
-                        gamma(n) * magnitude
-                    );
+            for form in forms() {
+                let mut output = vec![f32::NAN; count * width];
+                linear_in(form, &rows, &packed, &bias, &mut output);
+                // A group's term goes through the product of the scales, its
+                // product with the sum and its addition, each rounded, and two
+                // more additions for each group after it; the bias through two
+                // for each group.
+                let n = 2 * depth.div_ceil(GROUP) + 3;
+                for row in 0..count {
+                    for j in 0..width {
+                        let (value, magnitude) = exact(&rows, &packed, &bias, row, j);
+                        let error = (f64::from(output[row * width + j]) - value).abs();
+                        assert!(
+                            error <= gamma(n) * magnitude,
+                            "{form}, {scheme:?}, {depth}x{width}: row {row}, column {j} off by {error}, bound {}",
+                            gamma(n) * magnitude
+                        );
+                    }
                 }
             }
         }
@@ -384,7 +398,40 @@ fn products_are_those_of_double_precision() {
     rows.quantize(&[], 3, Rotation::None);
     assert!(rows.is_empty());
     let packed = Packed::quantize(3, 2, Scheme::INT8, |_, _| 1.0);
-    linear(&rows, &packed, &[0.0; 2], &mut []);
+    for form in forms() {
+        linear_in(form, &rows, &packed, &[0.0; 2], &mut []);
+    }
+    // The form in effect is one of them.
+    assert!(forms().contains(&kiral_kernels::form()));
+}
+
+#[test]
+fn every_number_of_rows_takes_its_tile() {
+    // Up to two tiles of the largest, and every number of rows left after one.
+    let mut random = Random(37);
+    let (depth, width) = (130, 35);
+    let weights = random.values(depth * width);
+    let packed = Packed::quantize(depth, width, Scheme::INT8, |k, j| weights[k * width + j]);
+    let bias = random.values(width);
+    let mut rows = Rows::new();
+    for count in 1..=13 {
+        rows.quantize(&random.values(depth * count), depth, Rotation::None);
+        for form in forms() {
+            let mut output = vec![f32::NAN; count * width];
+            linear_in(form, &rows, &packed, &bias, &mut output);
+            let n = 2 * depth.div_ceil(GROUP) + 3;
+            for row in 0..count {
+                for j in 0..width {
+                    let (value, magnitude) = exact(&rows, &packed, &bias, row, j);
+                    let error = (f64::from(output[row * width + j]) - value).abs();
+                    assert!(
+                        error <= gamma(n) * magnitude,
+                        "{form}, {count} rows: row {row}, column {j}"
+                    );
+                }
+            }
+        }
+    }
 }
 
 #[test]
@@ -400,7 +447,6 @@ fn products_are_near_those_of_the_numbers_quantized() {
             let bias = random.values(width);
             let mut output = vec![0.0f32; count * width];
             linear(&rows, &packed, &bias, &mut output);
-            let groups = depth.div_ceil(GROUP);
             for row in 0..count {
                 let x = rotated(&input[row * depth..][..depth], scheme.rotation);
                 for j in 0..width {
@@ -417,7 +463,7 @@ fn products_are_near_those_of_the_numbers_quantized() {
                         size += original.abs();
                         let (q, weight_scale, _) = weight_of(&packed, k, j);
                         let standing = f64::from(weight_scale) * f64::from(q);
-                        let input_scale = f64::from(rows.scales()[row * groups + k / GROUP]);
+                        let input_scale = f64::from(rows.scale(row, k / GROUP));
                         allowed += f64::from(x[k]).abs() * (standing - f64::from(w[k])).abs()
                             + input_scale * 0.501 * standing.abs();
                     }

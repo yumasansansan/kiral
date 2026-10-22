@@ -52,12 +52,14 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
   | 2 回ずつ | プロンプト（37 トークン）p50 | p99 | 1 ステップ p50 | p99 |
   | --- | ---: | ---: | ---: | ---: |
-  | 単精度，P コア（CPU 0，4.3〜4.4 GHz） | 175〜176 ms | 474〜492 ms | 15.9〜16.2 ms | 20.0〜20.5 ms |
-  | 整数，P コア | 351〜368 ms | 1020〜1042 ms | 13.5〜14.3 ms | 17.1〜17.7 ms |
-  | 単精度，E コア（CPU 8，3.70 GHz） | 246〜254 ms | 688〜700 ms | 20.9〜21.1 ms | 26.5〜27.2 ms |
-  | 整数，E コア | 486〜488 ms | 1399〜1402 ms | 21.3〜23.2 ms | 24.2〜25.4 ms |
+  | 単精度，P コア（CPU 0，4.3〜4.4 GHz） | 174〜182 ms | 482〜499 ms | 15.4〜15.9 ms | 19.8〜20.1 ms |
+  | 整数，可搬な形，P コア（4.3 GHz） | 356〜375 ms | 1010〜1045 ms | 13.4〜14.4 ms | 16.2〜17.4 ms |
+  | 整数，AVX-VNNI，P コア（5.0 GHz） | 27.3〜27.4 ms | 80.8〜82.0 ms | 5.4〜5.5 ms | 6.3〜6.8 ms |
+  | 単精度，E コア（CPU 8，3.70 GHz） | 262〜266 ms | 739〜748 ms | 20.3〜20.9 ms | 23.7〜26.0 ms |
+  | 整数，可搬な形，E コア | 487 ms | 1400〜1405 ms | 22.2〜23.3 ms | 24.9〜25.6 ms |
+  | 整数，AVX-VNNI，E コア | 88.5〜88.6 ms | 265〜266 ms | 10.7〜11.3 ms | 12.2〜12.8 ms |
 
-  素の Rust による整数の積は，プロンプトでは単精度の積の 2 倍の時間がかかり，デコードの 1 ステップでは同じくらいです（1 ステップはすべての重みを読みます．単精度で 340 MB，バイトではその 4 分の 1 です）．アセンブリによる形（まず AVX-VNNI の `vpdpbusd`）を次に加え，これらをその比較の基準にします．
+  このプロセッサが使う AVX-VNNI の `vpdpbusd` では，プロンプトは単精度の P コアで約 6 分の 1，E コアで約 3 分の 1 の時間で，デコードの 1 ステップは約 3 分の 1 と 2 分の 1 です（1 ステップはすべての重みを読みます．単精度で 340 MB，バイトではその 4 分の 1 です）．VNNI を持たないプロセッサ向けの可搬な形は，プロンプトでは単精度の 2 倍，1 ステップでは同じくらいの時間がかかります．
 
 - Mozc は，使われるとおりに測ります．`kiral-tools eval --mozc` は，実行のためだけの Mozc（実行ごとに作って後で消すプロファイル．利用者自身の Mozc には何も学習させません）に，`mozc_emacs_helper` を通して読みをローマ字で 1 キーずつ打ち込み，打ったものが読みと一致することを確かめてから Space で変換し，取り消します．Mozc 2.29 は Acc@1 47.5，CER 7.91（左文脈あり 43.0 / 10.29．Mozc は左文脈を受け取りません．左文脈なし 52.0 / 5.54）です．`kiral-tools replay --mozc --cpu p0 --cpu e0` は，実行を P コアに，次に E コアに固定し（`kiral-sys`，`kiral-cpu`），クロックを読みながら，各キーと各変換の時間を測ります．i7-1360P での，Mozc の IPC を通した応答の時間：
 
@@ -82,6 +84,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
   | E コア（CPU 8，クロックの中央値 3.69 GHz） | 0.055 ms | 0.330 ms | 0.071 ms | 0.358 ms |
 
 - 単精度のカーネル（`kiral-kernels`）：パネルにパックした重みによる線形層，LayerNorm，GELU，softmax，キャッシュに対する attention を，コンパイラがベクトル化するシンプルな Rust で書いています．どれも倍精度と比べてテストし，誤差を丸めの解析から導いた上界に収めています．長さはベクトルの幅の倍数でないものを使います．
+- AVX-VNNI のアセンブリによる整数の積（`crates/kiral-kernels/asm/x86_64/qgemm_avx_vnni.S`）．最初のアセンブリの形です．1〜6 行×16 列のタイルで，`vpdpbusd` がバイトの積 4 つを 1 レーンに足します．3 行以下では和を 2 組に分け，2 倍の連鎖を並べて走らせます．可搬な形と同じく行数ごとに倍精度と比べてテストし，プロセッサが AVX-VNNI を持ち環境が許すところで使います．16〜40 行で，i7-1360P の P コアで 179〜205 GMAC/s（可搬な形は 8〜10），E コアで 46〜48（可搬な形は 6.3〜6.7）です（`kiral-tools bench kernels`）．
 - 命令セットのレベル（`kiral-cpu`）：std の検出によるレベルと，その中からの選択です．`KIRAL_ISA=<レベル>` と `KIRAL_KERNELS=portable` で選択を抑えられます．
 - 手書きの safetensors と JSON の読み取り（`kiral-model`）：どんなバイト列も受け付け，読めないものはパニックではなくエラーにします．
 
@@ -89,7 +92,7 @@ crates.io からは何も取得しません．形式はすべて手で解析し�
 
 ## ビルドとテスト
 
-最新の stable の Rust と LLVM 23 を使います．どのシステムでも，リンクは Clang が駆動し LLD が行います（`.cargo/config.toml`）．x86-64 向けのビルドは，システムが動くところならどこでも入力システムが動くよう x86-64-v2 向けです．macOS 向けは Apple シリコンの macOS 26 以降向けです．
+最新の stable の Rust と LLVM 23 を使います．どのシステムでも，リンクは Clang が駆動し LLD が行います（`.cargo/config.toml`）．アセンブリで書いたカーネルは，Clang がプリプロセッサと ELF・COFF・Mach-O 用の `asm/common.h` を通して組み立て，`llvm-ar` が束ねます（`crates/kiral-kernels/build.rs`．PATH 上のもの以外は `KIRAL_CLANG` と `KIRAL_AR` で指定します）．x86-64 向けのビルドは，システムが動くところならどこでも入力システムが動くよう x86-64-v2 向けです．macOS 向けは Apple シリコンの macOS 26 以降向けです．
 
 ```bash
 cargo build --release --locked
@@ -117,6 +120,10 @@ cargo run --release --locked -p kiral-tools -- eval --model data/zenz-v3.1-small
 
 ```bash
 cargo run --release --locked -p kiral-tools -- agree --model data/zenz-v3.1-small --weight-bits 4 --rotate 256
+```
+
+```bash
+cargo run --release --locked -p kiral-tools -- bench kernels --cpu p0 --cpu e0
 ```
 
 ```bash

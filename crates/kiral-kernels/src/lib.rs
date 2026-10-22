@@ -17,6 +17,14 @@
 //! measurement that shows the portable one slower, and is tested against it at
 //! every level of the processor ([`kiral-cpu`](../kiral_cpu/index.html)).
 //!
+//! The forms ([`Form`]): the portable one, and the AVX-VNNI kernel of the
+//! products in integers (`asm/x86_64/qgemm_avx_vnni.S`), which `build.rs`
+//! assembles with Clang. The form in effect ([`form`]) is the most preferred
+//! that the processor runs and the environment allows (`KIRAL_ISA`,
+//! `KIRAL_KERNELS=portable`), chosen once; each call into assembly is one
+//! unsafe block, in the module of its architecture, whose comment says what
+//! was checked, and the rest of the crate denies unsafe code.
+//!
 //! The kernels compute in single precision, as the networks do outside their
 //! products: layer normalization, GELU, softmax, the residual stream and
 //! attention over the cache of keys and values. The linear layers in single
@@ -30,7 +38,11 @@
 //! additions is whatever computes it fastest. A result may so differ in its last
 //! bits between builds, between processors, and between a row computed alone and
 //! the same row computed among others.
-#![forbid(unsafe_code)]
+#![deny(unsafe_code)]
+
+use std::sync::OnceLock;
+
+use kiral_cpu::{Choice, Features, Level, Request};
 
 pub mod activation;
 pub mod attention;
@@ -38,6 +50,119 @@ pub mod linear;
 pub mod norm;
 pub mod quantized;
 pub mod vector;
+#[cfg(target_arch = "x86_64")]
+mod x86_64;
+
+/// A form a kernel is computed in: the portable one, the reference, or one in
+/// assembly for a level of the processor's.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Form {
+    /// Plain Rust, compiled for the build's baseline.
+    Portable,
+    /// Assembly for AVX-VNNI: `vpdpbusd` on 256 bits (x86-64).
+    AvxVnni,
+}
+
+impl Form {
+    /// Every form, the reference first, then the more preferred after the less.
+    pub const ALL: [Self; 2] = [Self::Portable, Self::AvxVnni];
+
+    /// The form's name, as the tools take it.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Self::Portable => "portable",
+            Self::AvxVnni => "avx-vnni",
+        }
+    }
+
+    /// The form of a name.
+    #[must_use]
+    pub fn from_name(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|form| form.name() == name)
+    }
+
+    /// The level the form needs; none for the portable form.
+    #[must_use]
+    pub const fn level(self) -> Option<Level> {
+        match self {
+            Self::Portable => None,
+            Self::AvxVnni => Some(Level::AvxVnni),
+        }
+    }
+
+    /// Whether this build has the form: the portable one always, one in
+    /// assembly on its architecture.
+    #[must_use]
+    pub const fn is_built(self) -> bool {
+        match self {
+            Self::Portable => true,
+            Self::AvxVnni => cfg!(target_arch = "x86_64"),
+        }
+    }
+
+    /// The forms that a processor of these extensions runs, the reference
+    /// first: those the tests take every kernel in.
+    #[must_use]
+    pub fn available(features: Features) -> Vec<Self> {
+        Self::ALL
+            .into_iter()
+            .filter(|form| form.is_built() && form.level().is_none_or(|level| features.has(level)))
+            .collect()
+    }
+
+    /// The form a choice of the kernels takes: the most preferred form the
+    /// processor runs whose level is within the choice's, or the portable form
+    /// where the choice asks for it.
+    #[must_use]
+    pub fn of(choice: Choice, features: Features) -> Self {
+        if choice.portable {
+            return Self::Portable;
+        }
+        Self::available(features)
+            .into_iter()
+            .rfind(|form| {
+                form.level()
+                    .is_none_or(|level| choice.level.is_some_and(|chosen| level <= chosen))
+            })
+            .unwrap_or(Self::Portable)
+    }
+}
+
+impl std::fmt::Display for Form {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.name())
+    }
+}
+
+/// The form in effect, and why the environment's request was not taken, where
+/// it was not.
+static FORM: OnceLock<(Form, Option<kiral_cpu::Error>)> = OnceLock::new();
+
+fn chosen() -> &'static (Form, Option<kiral_cpu::Error>) {
+    FORM.get_or_init(|| {
+        let features = Features::detect();
+        match Request::from_environment() {
+            Ok(request) => (Form::of(Choice::new(features, request), features), None),
+            Err(error) => (Form::Portable, Some(error)),
+        }
+    })
+}
+
+/// The form of the kernels in effect: the most preferred that the processor
+/// runs and the environment allows, chosen at the first call; the portable
+/// form where the environment's request cannot be read ([`form_error`]).
+#[must_use]
+pub fn form() -> Form {
+    chosen().0
+}
+
+/// Why the environment's request of the kernels was not taken, where it was
+/// not.
+#[must_use]
+pub fn form_error() -> Option<&'static kiral_cpu::Error> {
+    chosen().1.as_ref()
+}
 
 /// The lanes a sum is kept in: 16 values of single precision, 512 bits, one
 /// vector of AVX-512, two of AVX2, four of SSE or NEON.

@@ -55,12 +55,14 @@ So far, the harness that every later step is measured on:
 
   | Two runs each | Prompts (37 tokens), p50 | p99 | Steps, p50 | p99 |
   | --- | ---: | ---: | ---: | ---: |
-  | Single precision, P-core (CPU 0, 4.3–4.4 GHz) | 175–176 ms | 474–492 ms | 15.9–16.2 ms | 20.0–20.5 ms |
-  | Integers, P-core | 351–368 ms | 1020–1042 ms | 13.5–14.3 ms | 17.1–17.7 ms |
-  | Single precision, E-core (CPU 8, 3.70 GHz) | 246–254 ms | 688–700 ms | 20.9–21.1 ms | 26.5–27.2 ms |
-  | Integers, E-core | 486–488 ms | 1399–1402 ms | 21.3–23.2 ms | 24.2–25.4 ms |
+  | Single precision, P-core (CPU 0, 4.3–4.4 GHz) | 174–182 ms | 482–499 ms | 15.4–15.9 ms | 19.8–20.1 ms |
+  | Integers, portable, P-core (4.3 GHz) | 356–375 ms | 1010–1045 ms | 13.4–14.4 ms | 16.2–17.4 ms |
+  | Integers, AVX-VNNI, P-core (5.0 GHz) | 27.3–27.4 ms | 80.8–82.0 ms | 5.4–5.5 ms | 6.3–6.8 ms |
+  | Single precision, E-core (CPU 8, 3.70 GHz) | 262–266 ms | 739–748 ms | 20.3–20.9 ms | 23.7–26.0 ms |
+  | Integers, portable, E-core | 487 ms | 1400–1405 ms | 22.2–23.3 ms | 24.9–25.6 ms |
+  | Integers, AVX-VNNI, E-core | 88.5–88.6 ms | 265–266 ms | 10.7–11.3 ms | 12.2–12.8 ms |
 
-  In plain Rust the products in integers take twice as long as those in single precision over a prompt, and about as long over a step of decoding, which reads every weight, 340 MB in single precision and a quarter of that in bytes: the forms in assembly, AVX-VNNI's `vpdpbusd` first, come next, with these as their measure.
+  With AVX-VNNI's `vpdpbusd`, the form the processor runs here, a prompt takes about a sixth of single precision's time on the P-core and a third on the E-core, and a step of decoding about a third and a half: a step reads every weight, 340 MB in single precision and a quarter of that in bytes. The portable form, for processors without VNNI, takes twice as long as single precision over a prompt and about as long over a step.
 
 - Mozc, measured as it is used: `kiral-tools eval --mozc` types each reading in romaji into a Mozc of the run's own -- a profile made for the run and removed after, so that the user's own Mozc learns nothing -- a key at a time through `mozc_emacs_helper`, converts it with Space and cancels it, checking that what was typed is the reading. Mozc 2.29 has Acc@1 47.5 and CER 7.91 (43.0 / 10.29 with left context, which it does not take, 52.0 / 5.54 without). `kiral-tools replay --mozc --cpu p0 --cpu e0` times each key and each conversion, the run pinned to a performance core and then to an efficiency core (`kiral-sys`, `kiral-cpu`), with the clock read beside; on an i7-1360P, the times of answers through Mozc's IPC:
 
@@ -85,6 +87,7 @@ So far, the harness that every later step is measured on:
   | E-core (CPU 8, 3.69 GHz at the median) | 0.055 ms | 0.330 ms | 0.071 ms | 0.358 ms |
 
 - The kernels in single precision (`kiral-kernels`): linear layers on weights packed in panels, layer normalization, GELU, softmax and attention over the cache, in plain Rust that the compiler turns into vector code. Each is tested against double precision, its error held to the bound that the analysis of its roundings gives, at lengths that are not multiples of the vectors' width.
+- The products in integers in assembly for AVX-VNNI (`crates/kiral-kernels/asm/x86_64/qgemm_avx_vnni.S`), the first form in assembly: tiles of one to six rows by sixteen columns, `vpdpbusd` adding four products of bytes to a lane, of three rows or fewer in two sets of sums so that twice the chains run side by side. Tested at every number of rows against double precision, as the portable form is, and run wherever the processor has AVX-VNNI and the environment allows it. With 16 to 40 rows, 179–205 GMAC/s on a P-core of the i7-1360P against the portable form's 8–10, and 46–48 on an E-core against 6.3–6.7 (`kiral-tools bench kernels`).
 - The levels of the instruction set (`kiral-cpu`), as std's detection finds them, and the choice among them that `KIRAL_ISA=<level>` and `KIRAL_KERNELS=portable` hold back.
 - safetensors and JSON read by hand (`kiral-model`), taking any bytes: what is not a file of theirs is an error, never a panic.
 
@@ -92,7 +95,7 @@ No crate is fetched from crates.io: the formats are parsed by hand, and Cargo.lo
 
 ## Building and testing
 
-The latest stable Rust, and LLVM 23: Clang drives the link, and LLD links, on every system (`.cargo/config.toml`). The builds for x86-64 are for x86-64-v2, so that the input method runs wherever its system does; the builds for macOS are for macOS 26 and later on Apple silicon.
+The latest stable Rust, and LLVM 23: Clang drives the link, and LLD links, on every system (`.cargo/config.toml`); Clang assembles the kernels written in assembly, through their preprocessor and `asm/common.h` for ELF, COFF and Mach-O, and `llvm-ar` archives them (`crates/kiral-kernels/build.rs`; `KIRAL_CLANG` and `KIRAL_AR` name others than those on `PATH`). The builds for x86-64 are for x86-64-v2, so that the input method runs wherever its system does; the builds for macOS are for macOS 26 and later on Apple silicon.
 
 ```bash
 cargo build --release --locked
@@ -120,6 +123,10 @@ cargo run --release --locked -p kiral-tools -- eval --model data/zenz-v3.1-small
 
 ```bash
 cargo run --release --locked -p kiral-tools -- agree --model data/zenz-v3.1-small --weight-bits 4 --rotate 256
+```
+
+```bash
+cargo run --release --locked -p kiral-tools -- bench kernels --cpu p0 --cpu e0
 ```
 
 ```bash
