@@ -8,7 +8,7 @@
 
 [package]
 name = "kiral-dict"
-description = "KIRAL's dictionary files: built from Mozc's dictionary, a double-array trie of readings, read where they lie"
+description = "KIRAL's dictionary files: built from Mozc's dictionary and SudachiDict's nouns, a double-array trie of readings, read where they lie"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

@@ -22,13 +22,16 @@
 //!
 //! The text of a path is its words' surfaces, but a word whose surface is its
 //! own reading, and a character of no reading, are written as the input wrote
-//! them, so that a parenthesis typed full-width stays full-width.
-//! [`Lattice::reaches`] tells whether a text is the text of some path: the
-//! oracle, the share of a benchmark's accepted conversions that the dictionary
-//! can make at all.
+//! them, so that a parenthesis typed full-width stays full-width; and a digit
+//! read in kana is written in kanji, as Mozc shows it, unless the word after it
+//! is a suffix of nouns -- いち alone as 一, いちねん as 1年
+//! ([`kiral_dict::mozc::mark_digits`]). [`Lattice::reaches`] tells whether a
+//! text is the text of some path, a digit read in kana written either way, as
+//! a conversion offers both: the oracle, the share of a benchmark's accepted
+//! conversions that the dictionary can make at all.
 #![forbid(unsafe_code)]
 
-use kiral_dict::{Dictionary, normalize};
+use kiral_dict::{Dictionary, mozc, normalize};
 
 /// A node of the lattice: a word, and the stretch of the input it reads.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -45,6 +48,8 @@ pub struct Node<'a> {
     pub cost: u16,
     /// Its surface; none where it is written as the input wrote it.
     pub surface: Option<&'a str>,
+    /// Its flags: [`mozc::DIGIT`], [`mozc::SUFFIX`].
+    pub flags: u16,
     /// Whether the dictionary has it.
     pub known: bool,
 }
@@ -100,6 +105,7 @@ impl<'a> Lattice<'a> {
                         rid: entry.rid,
                         cost: entry.cost,
                         surface: (entry.surface != stretch).then_some(entry.surface),
+                        flags: entry.flags,
                         known: true,
                     });
                 }
@@ -112,6 +118,7 @@ impl<'a> Lattice<'a> {
                 rid: unknown.id,
                 cost: unknown.cost,
                 surface: None,
+                flags: 0,
                 known: false,
             });
         }
@@ -151,11 +158,16 @@ impl<'a> Lattice<'a> {
         }
     }
 
-    /// Appends the text of a node to `text`.
-    pub fn push_text(&self, node: &Node<'a>, text: &mut String) {
-        match node.surface {
-            Some(surface) => text.push_str(surface),
-            None => text.extend(&self.shown[node.begin..node.end]),
+    /// Appends the text of a node to `text`, the node after it being `next`:
+    /// a digit read in kana in kanji, unless `next` is a suffix of nouns.
+    pub fn push_text(&self, node: &Node<'a>, next: Option<&Node<'a>>, text: &mut String) {
+        let kanji = (node.flags & mozc::DIGIT != 0 && next.is_none_or(|next| next.flags & mozc::SUFFIX == 0))
+            .then(|| node.surface.and_then(mozc::kanji_digit))
+            .flatten();
+        match (kanji, node.surface) {
+            (Some(kanji), _) => text.push_str(kanji),
+            (None, Some(surface)) => text.push_str(surface),
+            (None, None) => text.extend(&self.shown[node.begin..node.end]),
         }
     }
 
@@ -163,8 +175,9 @@ impl<'a> Lattice<'a> {
     #[must_use]
     pub fn text(&self, path: &Path) -> String {
         let mut text = String::new();
-        for &node in &path.nodes {
-            self.push_text(&self.nodes[node], &mut text);
+        for (number, &node) in path.nodes.iter().enumerate() {
+            let next = path.nodes.get(number + 1).map(|&next| &self.nodes[next]);
+            self.push_text(&self.nodes[node], next, &mut text);
         }
         text
     }
@@ -246,7 +259,9 @@ impl<'a> Lattice<'a> {
     }
 
     /// Whether a text is the text of some path: of words the dictionary has
-    /// alone, where `known_only`, or of characters of no reading as well.
+    /// alone, where `known_only`, or of characters of no reading as well. A
+    /// digit read in kana may be written in kanji or as an Arabic numeral,
+    /// whatever follows it.
     #[must_use]
     pub fn reaches(&self, text: &str, known_only: bool) -> bool {
         let target: Vec<char> = text.chars().collect();
@@ -264,15 +279,26 @@ impl<'a> Lattice<'a> {
                     if known_only && !node.known {
                         continue;
                     }
-                    node_text.clear();
-                    self.push_text(node, &mut node_text);
-                    let mut taken = 0;
-                    let fits = node_text.chars().all(|character| {
-                        taken += 1;
-                        target.get(done + taken - 1) == Some(&character)
-                    });
-                    if fits {
-                        reachable[node.end * width + done + taken] = true;
+                    // The text before a node that is no suffix, then, for a
+                    // digit, the one before a suffix.
+                    for before_suffix in [false, true] {
+                        if before_suffix && node.flags & mozc::DIGIT == 0 {
+                            break;
+                        }
+                        let suffix = Node {
+                            flags: mozc::SUFFIX,
+                            ..*node
+                        };
+                        node_text.clear();
+                        self.push_text(node, before_suffix.then_some(&suffix), &mut node_text);
+                        let mut taken = 0;
+                        let fits = node_text.chars().all(|character| {
+                            taken += 1;
+                            target.get(done + taken - 1) == Some(&character)
+                        });
+                        if fits {
+                            reachable[node.end * width + done + taken] = true;
+                        }
                     }
                 }
             }

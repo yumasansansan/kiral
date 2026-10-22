@@ -6,10 +6,10 @@
 # license, in the machine-readable form of the REUSE specification: the GNU
 # General Public License, version 3 or any later version
 # (LICENSES/GPL-3.0-or-later.txt).
-"""Fetch what KIRAL is measured with, into data/: the benchmark and the models.
+"""Fetch what KIRAL is measured with, into data/: the benchmark, the models, the dictionaries.
 
     python scripts/fetch_datasets.py list
-    python scripts/fetch_datasets.py fetch ajimee [zenz-v3.1-small] [mozc-dictionary] [--record]
+    python scripts/fetch_datasets.py fetch ajimee [zenz-v3.1-small] [mozc-dictionary] [sudachi-dictionary] [--record]
 
 None of it is this project's. Each set comes under terms of its own, which `list`
 shows with where they are written, and none of it may be committed (data/ is
@@ -30,7 +30,8 @@ import hashlib
 import os
 import sys
 import urllib.request
-from pathlib import Path
+import zipfile
+from pathlib import Path, PurePosixPath
 from typing import Final
 
 ROOT: Final = Path(__file__).resolve().parent.parent
@@ -41,6 +42,9 @@ CHUNK: Final = 1 << 20
 AJIMEE_REVISION: Final = "401666cd56d1a570c2021798b64b6da4396bfd45"
 ZENZ_V31_SMALL_REVISION: Final = "344612e331bf3ba752a9bfef6633c93c6b933ebb"
 MOZC_REVISION: Final = "f183d4d3a7ba139d7cb2252c05f608e9f8266aef"
+SUDACHI_RELEASE: Final = "20261015"
+SUDACHI_REVISION: Final = "830bf9e1313f6f75235ba87ee041e144dbcad8c1"
+SUDACHI_RAW: Final = "https://sudachi.s3.ap-northeast-1.amazonaws.com/sudachidict-raw/v1"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -57,6 +61,7 @@ class Dataset:
     source: str
     terms: str
     files: list[File]
+    unzip: bool = False  # the archives' files extracted beside them, by their names alone
 
 
 def github(repository: str, revision: str, path: str, name: str) -> File:
@@ -133,7 +138,27 @@ MOZC_DICTIONARY: Final = Dataset(
     ],
 )
 
-DATASETS: Final = {dataset.name: dataset for dataset in (AJIMEE, ZENZ_V31_SMALL, MOZC_DICTIONARY)}
+SUDACHI_DICTIONARY: Final = Dataset(
+    name="sudachi-dictionary",
+    title=f"SudachiDict {SUDACHI_RELEASE}, its sources: the word lists of its small, core and notcore dictionaries",
+    source=f"https://github.com/WorksApplications/SudachiDict/tree/{SUDACHI_REVISION} and {SUDACHI_RAW}",
+    terms=(
+        "Apache-2.0 (Works Applications), including UniDic and a part of NEologd, as the README.md, LEGAL and "
+        "LICENSE-2.0.txt fetched with it say. A dictionary file built from it goes under the same terms, with "
+        "their text in it."
+    ),
+    files=[
+        File(f"{SUDACHI_RAW}/{SUDACHI_RELEASE}/{name}", name)
+        for name in ("small_lex.zip", "core_lex.zip", "notcore_lex.zip")
+    ]
+    + [
+        github("WorksApplications/SudachiDict", SUDACHI_REVISION, name, name)
+        for name in ("README.md", "LEGAL", "LICENSE-2.0.txt")
+    ],
+    unzip=True,
+)
+
+DATASETS: Final = {dataset.name: dataset for dataset in (AJIMEE, ZENZ_V31_SMALL, MOZC_DICTIONARY, SUDACHI_DICTIONARY)}
 
 
 def read_digests() -> dict[str, str]:
@@ -205,9 +230,29 @@ def fetch(dataset: Dataset, digests: dict[str, str], *, record: bool) -> int:
         elif digest != digests[key]:
             print(f"error: {key} has the SHA-256 {digest}, not the {digests[key]} recorded")
             failures += 1
+    if not failures and dataset.unzip:
+        for file in dataset.files:
+            if file.name.endswith(".zip"):
+                unzip(directory / file.name, directory)
     if not failures:
         print(f"{dataset.name}: {len(dataset.files)} files in {directory.relative_to(ROOT).as_posix()}")
     return failures
+
+
+def unzip(archive: Path, directory: Path) -> None:
+    """The files of an archive, into directory by their names alone: no member writes anywhere else."""
+    with zipfile.ZipFile(archive) as files:
+        for member in files.infolist():
+            name = PurePosixPath(member.filename).name
+            if member.is_dir() or not name or name.startswith("."):
+                continue
+            target = directory / name
+            if target.exists() and target.stat().st_size == member.file_size:
+                continue
+            with files.open(member) as source, target.open("wb") as stream:
+                while chunk := source.read(CHUNK):
+                    stream.write(chunk)
+            print(f"extracted {name} from {archive.name}")
 
 
 def show(dataset: Dataset) -> None:

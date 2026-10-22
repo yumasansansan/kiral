@@ -9,10 +9,11 @@
 //! KIRAL's dictionaries: words keyed by their readings, and the costs of the
 //! connections between their classes, in a file that is read where it lies.
 //!
-//! A dictionary is built from Mozc's open-source dictionary ([`mozc`],
-//! [`file::build`]) into a file whose readings are a double-array trie over the
-//! codes of their characters ([`trie`]) and whose words are entries of a
-//! surface, the ids of the classes on their left and right, and a cost. Read
+//! A dictionary is built ([`file::build`]) from Mozc's open-source dictionary
+//! ([`mozc`]) and the nouns of SudachiDict's that it lacks ([`sudachi`]) into
+//! a file whose readings are a double-array trie over the codes of their
+//! characters ([`trie`]) and whose words are entries of a surface, the ids of
+//! the classes on their left and right, a cost and flags. Read
 //! ([`Dictionary::parse`]), it takes nothing but the bytes: the trie is walked,
 //! and the entries are read, where they lie, so that a file mapped from the
 //! disk is looked up without being copied. Its parser takes any bytes: what is
@@ -28,6 +29,7 @@ use std::ops::Range;
 pub mod file;
 pub mod mozc;
 pub mod normalize;
+pub mod sudachi;
 pub mod trie;
 
 /// A word as it is built into a dictionary.
@@ -43,7 +45,8 @@ pub struct Word {
     pub rid: u16,
     /// Its cost: the higher, the less likely.
     pub cost: u16,
-    /// Its flags, four bits: [`mozc::SPELLING_CORRECTION`].
+    /// Its flags, four bits: [`mozc::SPELLING_CORRECTION`], [`mozc::DIGIT`],
+    /// [`mozc::SUFFIX`].
     pub flags: u16,
 }
 

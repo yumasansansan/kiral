@@ -41,6 +41,24 @@ without_context = { accuracy = 57.0, cer = 4.64 }
 oracle = { words_alone = 98.0, with_characters_of_no_reading = 98.0 }
 
 [[ajimee]]
+system = "KIRAL's dictionary alone, Mozc's (f183d4d3) and the nouns of SudachiDict's small and core lists (20261015) it lacks: Viterbi, no context"
+source = "kiral-tools eval --dict, 2026-10-23"
+accuracy = 53.5
+cer = 6.46
+with_context = { accuracy = 50.0, cer = 8.28 }
+without_context = { accuracy = 57.0, cer = 4.64 }
+oracle = { words_alone = 99.0, with_characters_of_no_reading = 99.0 }
+
+[[ajimee]]
+system = "KIRAL's dictionary alone, Mozc's (f183d4d3) and the nouns of all SudachiDict's lists (20261015) it lacks: Viterbi, no context"
+source = "kiral-tools eval --dict, 2026-10-23"
+accuracy = 54.0
+cer = 6.24
+with_context = { accuracy = 49.0, cer = 8.02 }
+without_context = { accuracy = 59.0, cer = 4.46 }
+oracle = { words_alone = 99.0, with_characters_of_no_reading = 99.0 }
+
+[[ajimee]]
 system = "Mozc 2.29.5160.102 (Ubuntu 26.10): typed in romaji, converted with Space, no context"
 source = "kiral-tools eval --mozc, 2026-10-23"
 accuracy = 47.5
@@ -133,6 +151,22 @@ machine = "Intel Core i7-1360P, Ubuntu 26.10"
 core = "E, CPU 8, pinned, 3.70 GHz at the median"
 kana = { count = 5820, p50 = 0.046, p99 = 0.272 }
 conversions = { count = 200, p50 = 0.059, p99 = 0.302 }
+
+[[replay]]
+system = "KIRAL's dictionary alone (mozc-sudachi, SudachiDict's core nouns): a kana at a time, each prefix converted from its lattice up"
+source = "kiral-tools replay --dict, 2026-10-23, the middle of three runs by the kana's p99"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "P, CPU 0, pinned, 4.87 GHz at the median"
+kana = { count = 5820, p50 = 0.032, p99 = 0.235 }
+conversions = { count = 200, p50 = 0.040, p99 = 0.242 }
+
+[[replay]]
+system = "KIRAL's dictionary alone (mozc-sudachi, SudachiDict's core nouns): a kana at a time, each prefix converted from its lattice up"
+source = "kiral-tools replay --dict, 2026-10-23, the middle of three runs by the kana's p99"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "E, CPU 8, pinned, 3.69 GHz at the median"
+kana = { count = 5820, p50 = 0.055, p99 = 0.330 }
+conversions = { count = 200, p50 = 0.071, p99 = 0.358 }
 
 [[replay]]
 system = "Mozc 2.28 (Ubuntu 24.04), conversions only, its IPC included"

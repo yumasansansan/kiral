@@ -10,12 +10,13 @@
 //! and costs, the cheapest path [`Lattice::best`] finds costs what the cheapest
 //! of all the paths, enumerated one by one, costs, and what its own nodes add up
 //! to; and the texts the oracle says the lattice reaches are those of the paths.
+//! And the texts of paths: words written as typed, digits read in kana.
 
 use std::collections::BTreeSet;
 
 use kiral_dict::Dictionary;
 use kiral_dict::file::{Unknown, build};
-use kiral_dict::mozc::Matrix;
+use kiral_dict::mozc::{self, Matrix};
 use kiral_dict::{Metadata, Word};
 use kiral_lattice::Lattice;
 
@@ -143,4 +144,51 @@ fn words_that_are_their_reading_are_written_as_typed() {
         Lattice::new(&dictionary, "").best(&dictionary).nodes,
         Vec::<usize>::new()
     );
+}
+
+#[test]
+fn digits_read_in_kana_are_written_in_kanji_unless_a_suffix_follows() {
+    let word = |reading: &str, surface: &str, id: u16, flags: u16| Word {
+        reading: reading.to_owned(),
+        surface: surface.to_owned(),
+        lid: id,
+        rid: id,
+        cost: 100,
+        flags,
+    };
+    let words = [
+        word("いち", "1", 1, mozc::DIGIT),
+        word("ねん", "年", 2, mozc::SUFFIX),
+        word("の", "の", 3, 0),
+    ];
+    let matrix = Matrix {
+        ids: 4,
+        costs: vec![0; 16],
+    };
+    let metadata = Metadata {
+        name: "test",
+        license: "CC0-1.0",
+        source: "made by the test",
+        notice: "",
+    };
+    let bytes = build(&words, &matrix, Unknown { id: 3, cost: 8000 }, &metadata).expect("a dictionary");
+    let dictionary = Dictionary::parse(&bytes).expect("a dictionary");
+    let text = |reading: &str| {
+        let lattice = Lattice::new(&dictionary, reading);
+        lattice.text(&lattice.best(&dictionary))
+    };
+    assert_eq!(text("いち"), "一");
+    assert_eq!(text("いちの"), "一の");
+    assert_eq!(text("いちねん"), "1年");
+    assert_eq!(text("いちいち"), "一一");
+    // The oracle takes the digit either way, as a conversion offers both.
+    let lattice = Lattice::new(&dictionary, "いちねん");
+    for reached in ["1年", "一年"] {
+        assert!(lattice.reaches(reached, true), "{reached}");
+    }
+    let lattice = Lattice::new(&dictionary, "いちの");
+    for reached in ["1の", "一の"] {
+        assert!(lattice.reaches(reached, true), "{reached}");
+    }
+    assert!(!lattice.reaches("壱の", false));
 }

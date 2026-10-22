@@ -213,6 +213,7 @@ fn with_dictionary(
     );
     let mut conversions = Vec::with_capacity(items.len());
     let (mut known, mut any) = (0, 0);
+    let mut missed = Vec::new();
     for item in items {
         let lattice = Lattice::new(&dictionary, &item.reading);
         let best = lattice.best(&dictionary);
@@ -220,15 +221,24 @@ fn with_dictionary(
             text: lattice.text(&best),
             stop: "dict",
         });
-        known += usize::from(item.expected.iter().any(|expected| lattice.reaches(expected, true)));
+        if item.expected.iter().any(|expected| lattice.reaches(expected, true)) {
+            known += 1;
+        } else {
+            missed.push(item.index.clone());
+        }
         any += usize::from(item.expected.iter().any(|expected| lattice.reaches(expected, false)));
     }
     println!(
         "oracle: an accepted conversion is a path of the lattice for {known} of {} items, of words of the \
-         dictionary alone ({:.1}%), and for {any} ({:.1}%) with characters of no reading",
+         dictionary alone ({:.1}%), and for {any} ({:.1}%) with characters of no reading; not of words alone: {}",
         items.len(),
         100.0 * count(known) / count(items.len()),
-        100.0 * count(any) / count(items.len())
+        100.0 * count(any) / count(items.len()),
+        if missed.is_empty() {
+            "none".to_owned()
+        } else {
+            missed.join(", ")
+        }
     );
     Ok((label, conversions))
 }

@@ -19,7 +19,9 @@ before a reading is looked up. `kiral-tools dict build` writes it
 A dictionary file is not KIRAL's code and is not under its license: it holds
 words under the terms of their source, and those terms' notices, in its
 metadata. One built from Mozc's open-source dictionary goes under IPAdic's
-terms and Mozc's BSD-3-Clause license, whose text it carries.
+terms and Mozc's BSD-3-Clause license, whose text it carries; one with
+SudachiDict's nouns, under the Apache License 2.0 and UniDic's BSD-3-Clause
+license as well, with SudachiDict's notices.
 
 Every number is little-endian. Offsets count bytes from the beginning of the
 file.
@@ -104,10 +106,16 @@ are sorted by their cost, the cheapest first. An entry is twelve bytes:
 | 8 | 2 | the id of its class on its right |
 | 10 | 2 | its cost: the higher, the less likely |
 
-The one flag so far is 1, a word whose reading is spelt otherwise than the
-word is (Mozc's `SPELLING_CORRECTION`: ばんしあ for ヴァンシア). A surface is UTF-8;
-entries may share one. A reader leaves out an entry whose surface lies past the
-surfaces' end or is not UTF-8.
+The flags:
+
+| Flag | What |
+| ---: | --- |
+| 1 | a word whose reading is spelt otherwise than the word is (Mozc's `SPELLING_CORRECTION`: ばんしあ for ヴァンシア) |
+| 2 | a digit read in kana, its surface an Arabic numeral (いち for 1): written in kanji (一, and 零 for 0) unless the word after it has flag 4, as Mozc shows it |
+| 4 | a suffix of nouns (年, 人前), after which a digit read in kana stays an Arabic numeral |
+
+Flag 8 is reserved, and 0. A surface is UTF-8; entries may share one. A reader leaves
+out an entry whose surface lies past the surfaces' end or is not UTF-8.
 
 ## The matrix
 

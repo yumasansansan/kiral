@@ -27,6 +27,19 @@ use crate::Word;
 /// A word whose reading is spelt otherwise than the word is.
 pub const SPELLING_CORRECTION: u16 = 1;
 
+/// A digit read in kana, which a path's text writes in kanji unless a suffix
+/// follows it ([`mark_digits`]).
+pub const DIGIT: u16 = 2;
+
+/// A suffix of nouns, after which a digit read in kana stays an Arabic numeral.
+pub const SUFFIX: u16 = 4;
+
+/// The part of speech of Mozc's Arabic numerals, as `id.def` names it.
+pub const ARABIC_NUMERAL: &str = "名詞,数,アラビア数字,*,*,*,*";
+
+/// How the parts of speech of Mozc's suffixes of nouns begin.
+pub const NOUN_SUFFIX: &str = "名詞,接尾,";
+
 /// Why the files could not be read.
 #[derive(Debug)]
 pub enum Error {
@@ -34,6 +47,8 @@ pub enum Error {
     Io(PathBuf, std::io::Error),
     /// A line that is not what the file holds.
     Line(String, usize, String),
+    /// What the files should name and do not.
+    Missing(String),
 }
 
 impl std::fmt::Display for Error {
@@ -41,6 +56,7 @@ impl std::fmt::Display for Error {
         match self {
             Self::Io(path, error) => write!(formatter, "{}: {error}", path.display()),
             Self::Line(file, line, message) => write!(formatter, "{file}, line {line}: {message}"),
+            Self::Missing(message) => formatter.write_str(message),
         }
     }
 }
@@ -82,7 +98,7 @@ impl Source {
     }
 }
 
-fn read_text(directory: &Path, name: &str) -> Result<String, Error> {
+pub(crate) fn read_text(directory: &Path, name: &str) -> Result<String, Error> {
     let path = directory.join(name);
     std::fs::read_to_string(&path).map_err(|error| Error::Io(path, error))
 }
@@ -112,6 +128,56 @@ pub fn read(directory: &Path) -> Result<Source, Error> {
         parts_of_speech,
         notice,
     })
+}
+
+/// Marks the digits read in kana ([`DIGIT`]) and the suffixes of nouns
+/// ([`SUFFIX`]), for a path's text to write the digits as Mozc shows them, and
+/// returns how many words of each it marked.
+///
+/// Mozc's dictionary has the digits read in kana -- いち for 1, ぜろ and れい for
+/// 0 -- as cheap words of its class of Arabic numerals, which Mozc's converter
+/// does not show as they are where a segment's content is the digit alone (with
+/// a particle, say): its number rewriter puts the number in kanji in its place
+/// (一, and 零 for zero), and the Arabic numeral among the candidates below it
+/// (`KANJI_FIRST` in `src/rewriter/number_rewriter.cc`). Where a suffix follows
+/// the digit in its segment -- 1年, 1人前 -- the content is not the digit alone,
+/// and the Arabic numeral stays. KIRAL has no segments: a digit is written in
+/// kanji unless the word after it is a suffix of nouns, a word whose class on
+/// its left is one of `名詞,接尾`'s.
+pub fn mark_digits(source: &mut Source) -> (usize, usize) {
+    let arabic = source.id_of(ARABIC_NUMERAL);
+    let suffixes: Vec<bool> = source
+        .parts_of_speech
+        .iter()
+        .map(|name| name.starts_with(NOUN_SUFFIX))
+        .collect();
+    let (mut digits, mut suffix_words) = (0, 0);
+    for word in &mut source.words {
+        if Some(word.lid) == arabic
+            && word.rid == word.lid
+            && kanji_digit(&word.surface).is_some()
+            && !word.reading.bytes().any(|byte| byte.is_ascii_digit())
+        {
+            word.flags |= DIGIT;
+            digits += 1;
+        }
+        if suffixes.get(usize::from(word.lid)).copied().unwrap_or(false) {
+            word.flags |= SUFFIX;
+            suffix_words += 1;
+        }
+    }
+    (digits, suffix_words)
+}
+
+/// A digit in kanji, as Mozc's number rewriter writes it: 零 for 0, 一 to 九;
+/// none for a surface that is not one digit.
+#[must_use]
+pub fn kanji_digit(surface: &str) -> Option<&'static str> {
+    const KANJI: [&str; 10] = ["零", "一", "二", "三", "四", "五", "六", "七", "八", "九"];
+    match *surface.as_bytes() {
+        [digit @ b'0'..=b'9'] => Some(KANJI[usize::from(digit - b'0')]),
+        _ => None,
+    }
 }
 
 /// The part of speech of each id, from `id.def`'s text: a line for each id,
@@ -263,5 +329,48 @@ mod tests {
         );
         assert!(read_matrix("2\n1\n2\n3\n").is_err());
         assert!(read_matrix("x\n").is_err());
+    }
+
+    #[test]
+    fn digits_read_in_kana_and_suffixes_are_marked() {
+        let word = |reading: &str, surface: &str, id: u16| Word {
+            reading: reading.to_owned(),
+            surface: surface.to_owned(),
+            lid: id,
+            rid: id,
+            cost: 753,
+            flags: 0,
+        };
+        let mut source = Source {
+            words: vec![
+                word("いち", "1", 1),
+                word("ぜろ", "0", 1),
+                word("いちねんご", "1年後", 1),
+                word("1", "1", 1),
+                word("じゅう", "10", 1),
+                word("いち", "1", 2),
+                word("ねん", "年", 3),
+            ],
+            matrix: Matrix {
+                ids: 4,
+                costs: vec![0; 16],
+            },
+            parts_of_speech: [
+                "BOS/EOS",
+                ARABIC_NUMERAL,
+                "名詞,数,漢数字,*,*,*,*",
+                "名詞,接尾,助数詞,*,*,*,*",
+            ]
+            .map(str::to_owned)
+            .to_vec(),
+            notice: String::new(),
+        };
+        assert_eq!(mark_digits(&mut source), (2, 1));
+        let flags: Vec<u16> = source.words.iter().map(|word| word.flags).collect();
+        assert_eq!(flags, [DIGIT, DIGIT, 0, 0, 0, 0, SUFFIX]);
+        assert_eq!(kanji_digit("0"), Some("零"));
+        assert_eq!(kanji_digit("9"), Some("九"));
+        assert_eq!(kanji_digit("10"), None);
+        assert_eq!(kanji_digit("一"), None);
     }
 }
