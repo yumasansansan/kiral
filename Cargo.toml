@@ -1,0 +1,43 @@
+# SPDX-FileCopyrightText: 2026 Yuma Kakei <yumasansansan@gmail.com>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# This file is part of KIRAL. The SPDX lines name its copyright holder and its
+# license, in the machine-readable form of the REUSE specification: the GNU
+# General Public License, version 3 or any later version
+# (LICENSES/GPL-3.0-or-later.txt).
+#
+# KIRAL as a Cargo workspace: every crate is under crates/, and none is fetched
+# from crates.io (cargo runs with --locked, and Cargo.lock names the workspace's
+# own crates only). The operating systems' functions are declared by hand, and
+# the formats KIRAL reads -- safetensors, JSON, the tokenizers' files -- are
+# parsed by hand.
+#
+# The lints are JPEG-Unround's: missing documentation, missing Debug and
+# needless qualifications are errors, clippy's pedantic group too, and every
+# unsafe block holds one operation and says why it is sound. Crates that need no
+# unsafe code forbid it in their roots.
+
+[workspace]
+members = ["crates/*"]
+resolver = "3"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.99"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/yumasansansan/kiral"
+publish = false
+
+[workspace.lints.rust]
+unsafe_op_in_unsafe_fn = "forbid"
+missing_debug_implementations = "deny"
+missing_docs = "deny"
+unused_qualifications = "deny"
+
+[workspace.lints.clippy]
+pedantic = { level = "deny", priority = -1 }
+undocumented_unsafe_blocks = "deny"
+multiple_unsafe_ops_per_block = "deny"
+cast_lossless = "deny"
+as_conversions = "deny"

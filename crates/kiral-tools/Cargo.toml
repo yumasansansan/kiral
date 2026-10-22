@@ -1,0 +1,29 @@
+# SPDX-FileCopyrightText: 2026 Yuma Kakei <yumasansansan@gmail.com>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# This file is part of KIRAL. The SPDX lines name its copyright holder and its
+# license, in the machine-readable form of the REUSE specification: the GNU
+# General Public License, version 3 or any later version
+# (LICENSES/GPL-3.0-or-later.txt).
+
+[package]
+name = "kiral-tools"
+description = "KIRAL's command line: the measurements of accuracy against AJIMEE-Bench"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[[bin]]
+name = "kiral-tools"
+path = "src/main.rs"
+
+[dependencies]
+kiral-cpu = { path = "../kiral-cpu" }
+kiral-model = { path = "../kiral-model" }
+kiral-nn = { path = "../kiral-nn" }
+
+[lints]
+workspace = true

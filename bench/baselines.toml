@@ -1,0 +1,81 @@
+# SPDX-FileCopyrightText: 2026 Yuma Kakei <yumasansansan@gmail.com>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# This file is part of KIRAL. The SPDX lines name its copyright holder and its
+# license, in the machine-readable form of the REUSE specification: the GNU
+# General Public License, version 3 or any later version
+# (LICENSES/GPL-3.0-or-later.txt).
+#
+# The numbers that KIRAL's conversions are compared with, on AJIMEE-Bench
+# JWTD_v2/v1: 200 readings, 100 of them with left context. `accuracy` is Acc@1
+# and `cer` the character error rate, both in percent; `kiral-tools eval`
+# measures them, and keeps each run's conversions in bench/results/, which is
+# not committed, for the next run to be compared with item by item.
+#
+# The rows of `kiral-tools eval` are measured by the same harness as KIRAL's
+# own conversions will be. The rows of `earlier` were measured in October 2026,
+# before this repository, by a harness of their own: their accuracies agree with
+# this harness's within an item, and their character error rates were not
+# reproduced by it.
+
+[[ajimee]]
+system = "zenz-v3.1-small alone: single precision, greedy, zenz-v3's prompt, its left context the last 40 characters"
+source = "kiral-tools eval, 2026-10-22"
+accuracy = 87.0
+cer = 1.58
+with_context = { accuracy = 83.0, cer = 2.47 }
+without_context = { accuracy = 91.0, cer = 0.69 }
+
+[[ajimee]]
+system = "Mozc 2.28 with its OSS dictionary (Ubuntu 24.04), no context"
+source = "earlier"
+accuracy = 47.0
+cer = 6.4
+
+[[ajimee]]
+system = "zenz-v3.1-small alone: single precision, greedy"
+source = "earlier"
+accuracy = 86.0
+cer = 2.53
+
+[[ajimee]]
+system = "zenz-v3.1-small alone: llama.cpp's Q8_0, greedy"
+source = "earlier"
+accuracy = 86.0
+cer = 2.98
+
+[[ajimee]]
+system = "zenz-v3.1-small alone: int8 weights per channel, int8 inputs per token (W8A8), greedy"
+source = "earlier"
+accuracy = 85.5
+cer = 2.22
+
+[[ajimee]]
+system = "zenz-v3.1-small alone: llama.cpp's Q5_K_M, the form zenz is shipped in, greedy"
+source = "earlier"
+accuracy = 84.5
+cer = 3.45
+
+[[ajimee]]
+system = "zenz-v3.1-small alone: llama.cpp's Q4_K_M, greedy"
+source = "earlier"
+accuracy = 83.0
+cer = 2.81
+
+[[ajimee]]
+system = "zenz-v3.1-small alone: llama.cpp's Q4_0, greedy"
+source = "earlier"
+accuracy = 82.0
+cer = 2.55
+
+[[ajimee]]
+system = "zenz-v3.1-small alone: int4 weights in groups of 32, rounded to nearest (W4A8), greedy"
+source = "earlier"
+accuracy = 78.5
+cer = 3.43
+
+[[ajimee]]
+system = "zenz-v3.2-small alone: llama.cpp's Q5_K_M, greedy, stopped at any of U+EE00 to U+EE0F"
+source = "earlier"
+accuracy = 85.5
+cer = 1.77

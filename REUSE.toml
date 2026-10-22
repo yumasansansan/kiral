@@ -1,0 +1,23 @@
+# SPDX-FileCopyrightText: 2026 Yuma Kakei <yumasansansan@gmail.com>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# This file is part of KIRAL. The SPDX lines name its copyright holder and its
+# license, in the machine-readable form of the REUSE specification: the GNU
+# General Public License, version 3 or any later version
+# (LICENSES/GPL-3.0-or-later.txt).
+#
+# The copyright holders and licenses of the files that cannot name them in a
+# comment of their own: Cargo.lock, which cargo writes over, and the digests of
+# what scripts/fetch_datasets.py fetches, which it writes. Every other file
+# names them at its top. The license texts are in LICENSES/, and `reuse lint`
+# checks the repository in the CI. The models and data that KIRAL is measured
+# with are not in the repository: they are fetched into data/, which is not
+# committed, under their own licenses.
+
+version = 1
+
+[[annotations]]
+path = ["Cargo.lock", "scripts/datasets.sha256"]
+precedence = "override"
+SPDX-FileCopyrightText = "2026 Yuma Kakei <yumasansansan@gmail.com>"
+SPDX-License-Identifier = "GPL-3.0-or-later"

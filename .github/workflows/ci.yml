@@ -1,0 +1,146 @@
+# SPDX-FileCopyrightText: 2026 Yuma Kakei <yumasansansan@gmail.com>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# This file is part of KIRAL. The SPDX lines name its copyright holder and its
+# license, in the machine-readable form of the REUSE specification: the GNU
+# General Public License, version 3 or any later version
+# (LICENSES/GPL-3.0-or-later.txt).
+#
+# The rust job checks and tests the workspace on each of the three systems KIRAL
+# runs on (ci/rust.sh), with the latest stable toolchain (rust-toolchain.toml):
+# its layout, clippy with every warning an error, and the tests in the dev and
+# the release profile, which run the kernels at every level the runner has. The
+# x86-64 builds are for x86-64-v2, the macOS ones for Apple M1 and later, macOS
+# 26.0 and later.
+#
+# The targets job builds the workspace on x86-64 for x86-64-v3, and for
+# x86-64-v4 with vectors of 512 bits, as distributions that raise the baseline
+# build it, and tests each build where the runner has what it needs
+# (ci/targets.sh): GitHub's runners have AVX-512 about one time in three. The
+# levels no runner can be counted on to have are tested under Intel's SDE, on
+# a machine of one's own (ci/emulated.sh).
+#
+# The python job checks scripts/ with ruff (ci/python.sh), and the reuse job
+# checks with reuse lint, from Ubuntu's reuse package, that every file names its
+# copyright holder and license (REUSE.toml, LICENSES/).
+#
+# The checkout is plain git, and ci/setup.sh installs a pinned LLVM toolchain,
+# as in ADLplug-Next and JPEG-Unround. No action from elsewhere is used.
+
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  rust:
+    name: rust (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025-vs2026, ubuntu-26.04, macos-26]
+
+    steps:
+      - name: Check out
+        run: |
+          # The commit alone. Git keeps the files as committed on every runner.
+          git config --global core.autocrlf false
+          git -c init.defaultBranch=main init --quiet
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+          git fetch --no-tags --quiet --depth 1 origin "$GITHUB_SHA"
+          git checkout --quiet --detach "$GITHUB_SHA"
+          git log -1 --format='%H %s'
+
+      - name: Set up the toolchain
+        run: bash ci/setup.sh
+
+      - name: Check and test
+        run: bash ci/rust.sh
+
+  targets:
+    name: x86-64-v3 and v4 (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025-vs2026, ubuntu-26.04]
+
+    steps:
+      - name: Check out
+        run: |
+          git config --global core.autocrlf false
+          git -c init.defaultBranch=main init --quiet
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+          git fetch --no-tags --quiet --depth 1 origin "$GITHUB_SHA"
+          git checkout --quiet --detach "$GITHUB_SHA"
+          git log -1 --format='%H %s'
+
+      - name: Set up the toolchain
+        run: bash ci/setup.sh
+
+      - name: Build for x86-64-v3 and v4, and test where the runner has them
+        run: bash ci/targets.sh test
+
+  python:
+    name: python (ubuntu-26.04)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out
+        run: |
+          git config --global core.autocrlf false
+          git -c init.defaultBranch=main init --quiet
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+          git fetch --no-tags --quiet --depth 1 origin "$GITHUB_SHA"
+          git checkout --quiet --detach "$GITHUB_SHA"
+          git log -1 --format='%H %s'
+
+      - name: Install ruff
+        run: |
+          # The version the scripts were last checked with; pipx comes with the
+          # runner, and keeps ruff apart from the system's Python.
+          pipx install ruff==0.16.8
+
+      - name: Check the scripts
+        run: bash ci/python.sh
+
+  reuse:
+    name: REUSE compliance
+    runs-on: ubuntu-26.04
+    timeout-minutes: 15
+
+    steps:
+      - name: Check out
+        run: |
+          git config --global core.autocrlf false
+          git -c init.defaultBranch=main init --quiet
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+          git fetch --no-tags --quiet --depth 1 origin "$GITHUB_SHA"
+          git checkout --quiet --detach "$GITHUB_SHA"
+          git log -1 --format='%H %s'
+
+      - name: Install reuse
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends reuse
+          reuse --version
+
+      - name: Check the licensing of every file
+        run: reuse lint
