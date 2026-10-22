@@ -16,6 +16,8 @@
 //! - `dict`: dictionary files, built from Mozc's open-source dictionary.
 //! - `eval`: the accuracy of a conversion against AJIMEE-Bench, and the items
 //!   it changed since the run before.
+//! - `model`: model files, made from zenz as Hugging Face publishes it, and
+//!   checked.
 //! - `replay`: the time an input method takes for each key, typed as a user
 //!   types, on the processors asked for.
 #![forbid(unsafe_code)]
@@ -27,6 +29,7 @@ mod bench;
 mod dict;
 mod eval;
 mod metrics;
+mod model;
 mod mozc;
 mod pinned;
 mod replay;
@@ -44,6 +47,7 @@ commands:
   bench   the time of a computation, pinned: bench kernels, bench model (kiral-tools bench help)
   dict    dictionary files: dict build (kiral-tools dict help)
   eval    the accuracy of a conversion against AJIMEE-Bench (kiral-tools eval --help)
+  model   model files: model convert, model check (kiral-tools model help)
   replay  the time of each key typed into an input method (kiral-tools replay --help)";
 
 fn main() -> ExitCode {
@@ -54,6 +58,7 @@ fn main() -> ExitCode {
         Some("bench") => bench::main(arguments),
         Some("dict") => dict::main(arguments),
         Some("eval") => eval::main(arguments),
+        Some("model") => model::main(arguments),
         Some("replay") => replay::main(arguments),
         Some("help" | "--help" | "-h") => {
             println!("{USAGE}");

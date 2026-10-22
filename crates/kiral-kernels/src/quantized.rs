@@ -33,8 +33,9 @@
 //! group after another: the group's bytes quad by quad, sixteen quads of
 //! sixteen columns of four bytes, the four bytes of a column's quad side by
 //! side -- a vector of `vpdpbusd` -- then the panel's sixteen scales and sixteen
-//! offsets. The inputs are quantized as they come, each row's groups in one
-//! piece ([`Rows`]).
+//! offsets. They are packed when a model is converted, and read where they lie
+//! in its file ([`Packed::from_bytes`]). The inputs are quantized as they come,
+//! each row's groups in one piece ([`Rows`]).
 //!
 //! A scheme ([`Scheme`]) may rotate the depth first, as ConvRot does for the
 //! diffusion transformers (Huang et al., 2025): each block of the depth of a
@@ -54,6 +55,8 @@
 //! the group's end: the compiler makes vector products of them
 //! (`pmovsxbd` and `pmaddwd` on x86-64-v2), where adding the four within each
 //! quad would have it shuffle the weights first.
+
+use std::borrow::Cow;
 
 use crate::{Form, multiply_add};
 
@@ -123,18 +126,19 @@ impl Scheme {
     }
 }
 
-/// A linear layer's weights, quantized and packed for [`linear`].
+/// A linear layer's weights, quantized and packed for [`linear`]: packed here,
+/// or read where they lie in a model file.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Packed {
+pub struct Packed<'a> {
     depth: usize,
     width: usize,
     groups: usize,
     scheme: Scheme,
     /// The panels, each its groups one after another.
-    bytes: Vec<u8>,
+    bytes: Cow<'a, [u8]>,
 }
 
-impl Packed {
+impl Packed<'static> {
     /// The weights of a layer of `depth` inputs and `width` outputs, `weight(k,
     /// j)` the weight of input `k` in output `j`, quantized by a scheme: each
     /// column rotated, then each column's group to its scale, a weight to the
@@ -193,8 +197,37 @@ impl Packed {
             width,
             groups,
             scheme,
-            bytes,
+            bytes: Cow::Owned(bytes),
         }
+    }
+}
+
+impl<'a> Packed<'a> {
+    /// The weights of a layer of `depth` inputs and `width` outputs that a
+    /// scheme quantized and packed into `bytes`, read where they lie: the
+    /// panels of [`PANEL`] columns, each its groups of [`GROUP_BYTES`], as
+    /// [`Packed::quantize`] lays them out. None where the bytes are of another
+    /// length than the layer's panels, either size is 0, or the scheme's weights
+    /// are not of 2 to 8 bits or its rotation not of a power of four.
+    #[must_use]
+    pub fn from_bytes(depth: usize, width: usize, scheme: Scheme, bytes: &'a [u8]) -> Option<Self> {
+        let rotation = match scheme.rotation {
+            Rotation::None => true,
+            Rotation::Hadamard(order) => order.is_power_of_two() && order.trailing_zeros().is_multiple_of(2),
+        };
+        let groups = depth.div_ceil(GROUP);
+        let length = width
+            .div_ceil(PANEL)
+            .checked_mul(groups)
+            .and_then(|count| count.checked_mul(GROUP_BYTES));
+        (depth > 0 && width > 0 && (2..=8).contains(&scheme.weight_bits) && rotation && length == Some(bytes.len()))
+            .then_some(Self {
+                depth,
+                width,
+                groups,
+                scheme,
+                bytes: Cow::Borrowed(bytes),
+            })
     }
 
     /// The scheme the weights were quantized by.
@@ -478,7 +511,7 @@ fn quantize_group(values: &[f32], bytes: &mut [u8]) -> (f32, f32) {
 ///
 /// Where the lengths do not fit the layer's, or the inputs were rotated
 /// otherwise than the weights.
-pub fn linear(input: &Rows, weight: &Packed, bias: &[f32], output: &mut [f32]) {
+pub fn linear(input: &Rows, weight: &Packed<'_>, bias: &[f32], output: &mut [f32]) {
     linear_in(crate::form(), input, weight, bias, output);
 }
 
@@ -488,7 +521,7 @@ pub fn linear(input: &Rows, weight: &Packed, bias: &[f32], output: &mut [f32]) {
 ///
 /// As [`linear`]; and where the form is one this build or this processor has
 /// not got.
-pub fn linear_in(form: Form, input: &Rows, weight: &Packed, bias: &[f32], output: &mut [f32]) {
+pub fn linear_in(form: Form, input: &Rows, weight: &Packed<'_>, bias: &[f32], output: &mut [f32]) {
     let Packed {
         depth, width, scheme, ..
     } = *weight;
@@ -516,7 +549,7 @@ pub fn linear_in(form: Form, input: &Rows, weight: &Packed, bias: &[f32], output
 
 /// The portable form of [`linear`]: strips of [`STRIP`] columns, a row at a
 /// time.
-fn portable(input: &Rows, weight: &Packed, bias: &[f32], output: &mut [f32]) {
+fn portable(input: &Rows, weight: &Packed<'_>, bias: &[f32], output: &mut [f32]) {
     let Packed {
         width,
         groups,
@@ -560,7 +593,7 @@ fn portable(input: &Rows, weight: &Packed, bias: &[f32], output: &mut [f32]) {
 /// sixteen columns, each started from the bias in a tile of its own, summed by
 /// the kernel, then copied into the output.
 #[cfg(target_arch = "x86_64")]
-fn avx_vnni(input: &Rows, weight: &Packed, bias: &[f32], output: &mut [f32]) {
+fn avx_vnni(input: &Rows, weight: &Packed<'_>, bias: &[f32], output: &mut [f32]) {
     use crate::x86_64::{AVX_VNNI_ROWS, qgemm_avx_vnni};
     let Packed {
         width,

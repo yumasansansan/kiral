@@ -21,9 +21,14 @@
 //! with a merge that joins characters, for which it would not. The special words
 //! (`</s>` and the like) are never made from text, as llama.cpp does not make
 //! them when Zenzai tokenizes.
+//!
+//! A tokenizer is read from Hugging Face's files ([`Tokenizer::from_files`]),
+//! or from a model file, which holds its words' bytes and its merges in their
+//! order ([`Tokenizer::from_vocabulary`]).
 
 use std::collections::HashMap;
 
+use kiral_model::file::{self, Vocabulary};
 use kiral_model::json::{self, Value};
 
 use crate::Error;
@@ -176,6 +181,98 @@ impl Tokenizer {
             merges: table,
             specials,
         })
+    }
+
+    /// The tokenizer of a model file's vocabulary: its words' bytes, its merges
+    /// in their order, and its special words.
+    ///
+    /// # Errors
+    ///
+    /// Where a special word has bytes or another word none, two words are the
+    /// same byte, a merge makes a word of other bytes than its two words', or
+    /// joins two characters, or is given twice.
+    pub fn from_vocabulary(vocabulary: &Vocabulary<'_>) -> Result<Self, Error> {
+        let file::Specials {
+            unknown,
+            end,
+            begin,
+            padding,
+        } = vocabulary.specials();
+        let specials = Specials {
+            unknown,
+            end,
+            begin,
+            padding,
+        };
+        let special = [Some(unknown), Some(end), begin, padding];
+        let mut pieces = Vec::with_capacity(vocabulary.len());
+        let mut bytes = [None; 256];
+        for word in 0..vocabulary.len() {
+            let id = u32::try_from(word).map_err(|_| Error::Tokenizer("more words than 32 bits number".to_owned()))?;
+            let piece = vocabulary
+                .word(word)
+                .ok_or_else(|| Error::Tokenizer(format!("no bytes for the word {word}")))?;
+            if special.contains(&Some(id)) != piece.is_empty() {
+                return Err(Error::Tokenizer(format!(
+                    "the word {word}, of bytes where it is special or of none where it is not"
+                )));
+            }
+            if let &[byte] = piece
+                && bytes[usize::from(byte)].replace(id).is_some()
+            {
+                return Err(Error::Tokenizer(format!("two words of the byte {byte:#04x}")));
+            }
+            pieces.push(piece.to_vec());
+        }
+        let bytes = bytes.map(|word| word.unwrap_or(unknown));
+        let mut merges = HashMap::with_capacity(vocabulary.merge_count());
+        for ([left, right, made], rank) in vocabulary.merges().zip(0u32..) {
+            let piece = |word: u32| usize::try_from(word).ok().and_then(|word| pieces.get(word));
+            let (Some(left_piece), Some(right_piece), Some(made_piece)) = (piece(left), piece(right), piece(made))
+            else {
+                return Err(Error::Tokenizer(format!(
+                    "the merge {rank}, of words not in the vocabulary"
+                )));
+            };
+            if left_piece.is_empty() || right_piece.is_empty() || *made_piece != [&left_piece[..], right_piece].concat()
+            {
+                return Err(Error::Tokenizer(format!(
+                    "the merge {rank}, of a word other than its two words make"
+                )));
+            }
+            if !within_one_character(made_piece) {
+                return Err(Error::Tokenizer(format!(
+                    "the merge {rank}, which joins characters: tokens would need GPT-2's splitting of the text"
+                )));
+            }
+            if merges.insert((left, right), (rank, made)).is_some() {
+                return Err(Error::Tokenizer(format!("the merge {rank}, given twice")));
+            }
+        }
+        Ok(Self {
+            pieces,
+            bytes,
+            merges,
+            specials,
+        })
+    }
+
+    /// The bytes of each word, in their order: none for a special word.
+    pub fn words(&self) -> impl Iterator<Item = &[u8]> {
+        self.pieces.iter().map(Vec::as_slice)
+    }
+
+    /// The merges in their order: for each, the left word, the right word and
+    /// the word they make.
+    #[must_use]
+    pub fn merges(&self) -> Vec<[u32; 3]> {
+        let mut merges: Vec<(u32, [u32; 3])> = self
+            .merges
+            .iter()
+            .map(|(&(left, right), &(rank, made))| (rank, [left, right, made]))
+            .collect();
+        merges.sort_unstable();
+        merges.into_iter().map(|(_, merge)| merge).collect()
     }
 
     /// The tokens of a text, appended to `tokens`.
@@ -372,6 +469,92 @@ mod tests {
         assert!(error.to_string().contains("joins characters"), "{error}");
         assert!(Tokenizer::from_files(vocabulary.as_bytes(), "a c\n", specials).is_err());
         assert!(Tokenizer::from_files(br#"{"[UNK]": 0, "</s>": 2}"#, "", specials).is_err());
+    }
+
+    /// The tokenizer of a model file holding a vocabulary, and no tensors.
+    fn through_a_file(words: &[&[u8]], merges: &[[u32; 3]], specials: file::Specials) -> Result<Tokenizer, Error> {
+        let bytes = file::write(&file::Contents {
+            architecture: "test",
+            tokenizer: "byte-bpe",
+            metadata: file::Metadata {
+                name: "",
+                license: "",
+                source: "",
+                notice: "",
+            },
+            configuration: &[],
+            words,
+            merges,
+            specials,
+            tensors: &[],
+        })
+        .expect("a model file");
+        let model = file::ModelFile::parse(&bytes).expect("a model file");
+        Tokenizer::from_vocabulary(&model.vocabulary())
+    }
+
+    #[test]
+    fn a_model_files_vocabulary_is_the_same_tokenizer() {
+        let tokenizer = tokenizer();
+        let words: Vec<&[u8]> = tokenizer.words().collect();
+        let merges = tokenizer.merges();
+        assert_eq!(merges, [[6, 7, 10], [10, 8, 11], [10, 9, 12]]);
+        let Specials {
+            unknown,
+            end,
+            begin,
+            padding,
+        } = tokenizer.specials();
+        let read = through_a_file(
+            &words,
+            &merges,
+            file::Specials {
+                unknown,
+                end,
+                begin,
+                padding,
+            },
+        )
+        .expect("a tokenizer");
+        let (mut expected, mut tokens) = (Vec::new(), Vec::new());
+        for text in ["aのbあc", "ああのab", ""] {
+            tokenizer.encode(text, &mut expected);
+            read.encode(text, &mut tokens);
+        }
+        assert_eq!(tokens, expected);
+        assert_eq!(read.words().collect::<Vec<_>>(), words);
+        assert_eq!(read.merges(), merges);
+        assert_eq!(read.specials(), tokenizer.specials());
+        assert_eq!(read.bytes, tokenizer.bytes);
+    }
+
+    #[test]
+    fn a_vocabulary_against_the_rules_is_refused() {
+        let specials = file::Specials {
+            unknown: 0,
+            end: 1,
+            begin: None,
+            padding: None,
+        };
+        let words: [&[u8]; 6] = [b"", b"", b"a", b"b", &[0xe3], &[0xe3, b'a']];
+        assert!(through_a_file(&words, &[], specials).is_ok());
+        let refused = |words: &[&[u8]], merges: &[[u32; 3]], specials| {
+            through_a_file(words, merges, specials)
+                .expect_err("refused")
+                .to_string()
+        };
+        assert!(refused(&words, &[[4, 2, 3]], specials).contains("other than its two words make"));
+        assert!(refused(&words, &[[4, 2, 5]], specials).contains("joins characters"));
+        assert!(refused(&[b"", b"", b"a", b"a"], &[], specials).contains("two words of the byte"));
+        let special_with_bytes = file::Specials {
+            begin: Some(2),
+            ..specials
+        };
+        assert!(refused(&words, &[], special_with_bytes).contains("where it is special"));
+        assert!(refused(&[b"", b"", b""], &[], specials).contains("where it is not"));
+        let ab: [&[u8]; 5] = [b"", b"", &[0xe3], &[0x81], &[0xe3, 0x81]];
+        assert!(through_a_file(&ab, &[[2, 3, 4]], specials).is_ok());
+        assert!(refused(&ab, &[[2, 3, 4], [2, 3, 4]], specials).contains("given twice"));
     }
 
     #[test]

@@ -8,7 +8,7 @@
 
 [package]
 name = "kiral-model"
-description = "The files models come in: safetensors and the JSON of their headers and tokenizers, read by hand"
+description = "The files models come in, read by hand: KIRAL's model file, safetensors and the JSON of their headers and tokenizers"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

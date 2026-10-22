@@ -11,12 +11,16 @@
 //! file here: two blocks of width 16 and two heads. The logits are compared
 //! after the tokens are fed all at once, one at a time, and in two parts with
 //! the cache cut back between, which takes the cache of keys and values and the
-//! positions through every way the session is used.
+//! positions through every way the session is used. The model in integers,
+//! written to a model file and read back where it lies, computes the same
+//! logits.
 
 use kiral_kernels::quantized::{Rotation, Scheme};
+use kiral_model::file::{self, Contents, Kind, Metadata, ModelFile, Panels, Specials, Tensor};
 use kiral_model::json;
 use kiral_model::safetensors::SafeTensors;
-use kiral_nn::gpt2::{Config, Gpt2, Precision, Session};
+use kiral_nn::gpt2::{CONFIG_BYTES, Config, FileTensor, Gpt2, Precision, Session};
+use kiral_nn::zenz::Zenz;
 
 const LAYERS: usize = 2;
 const HEADS: usize = 2;
@@ -390,4 +394,184 @@ fn a_missing_or_misshapen_tensor_is_refused() {
         )
         .is_err()
     );
+}
+
+#[test]
+fn a_configuration_is_its_bytes() {
+    let config = config();
+    let bytes = config.to_bytes().expect("its bytes");
+    assert_eq!(Config::from_bytes(&bytes).expect("a configuration"), config);
+    assert!(Config::from_bytes(&bytes[..CONFIG_BYTES - 1]).is_err());
+    let refused = |at: usize, value: [u8; 4]| {
+        let mut changed = bytes;
+        changed[at..at + 4].copy_from_slice(&value);
+        Config::from_bytes(&changed).is_err()
+    };
+    assert!(refused(0, 0u32.to_le_bytes()), "no blocks");
+    assert!(refused(4, 3u32.to_le_bytes()), "three heads of a width of 16");
+    assert!(refused(20, 0f32.to_le_bytes()), "an epsilon of 0");
+    assert!(refused(20, f32::NAN.to_le_bytes()), "an epsilon that is no number");
+}
+
+/// The tensors, each value cut to bfloat16, as zenz-v3.1's are.
+fn in_bfloat16(tensors: &Tensors) -> Vec<(String, Vec<usize>, Vec<f32>)> {
+    tensors
+        .iter()
+        .map(|(name, shape, values)| {
+            let cut = values
+                .iter()
+                .map(|value| f32::from_bits(value.to_bits() & 0xffff_0000))
+                .collect();
+            (name.clone(), shape.clone(), cut)
+        })
+        .collect()
+}
+
+/// A model file of the model's tensors, of zenz's architecture and tokenizer,
+/// with a vocabulary of two special words and a byte for each other word.
+fn model_file(architecture: &str, config: &Config, parts: &[FileTensor<'_>]) -> Vec<u8> {
+    let tensors: Vec<Tensor<'_>> = parts.iter().map(FileTensor::tensor).collect();
+    let words: Vec<Vec<u8>> = (0..VOCABULARY)
+        .map(|word| {
+            if word < 2 {
+                Vec::new()
+            } else {
+                vec![u8::try_from(word).expect("a byte")]
+            }
+        })
+        .collect();
+    let words: Vec<&[u8]> = words.iter().map(Vec::as_slice).collect();
+    file::write(&Contents {
+        architecture,
+        tokenizer: "byte-bpe",
+        metadata: Metadata {
+            name: "test",
+            license: "GPL-3.0-or-later",
+            source: "random weights",
+            notice: "",
+        },
+        configuration: &config.to_bytes().expect("its bytes"),
+        words: &words,
+        merges: &[],
+        specials: Specials {
+            unknown: 0,
+            end: 1,
+            begin: None,
+            padding: None,
+        },
+        tensors: &tensors,
+    })
+    .expect("a model file")
+}
+
+#[test]
+fn a_model_file_computes_as_the_model_it_was_written_from() {
+    let mut random = Random(25);
+    let random_tensors = tensors(&mut random);
+    let ids = [4u32, 10, 0, 6, 6, 2, 9];
+    let schemes = [
+        Scheme::INT8,
+        Scheme {
+            weight_bits: 4,
+            rotation: Rotation::Hadamard(16),
+            fitted: true,
+        },
+    ];
+    // Random values of 16 significant bits are written in single precision;
+    // cut to bfloat16, in bfloat16.
+    for (tensors, floats) in [
+        (random_tensors.clone(), Kind::F32),
+        (in_bfloat16(&random_tensors), Kind::Bf16),
+    ] {
+        let bytes = file(&tensors);
+        let safetensors = SafeTensors::parse(&bytes).expect("a file");
+        for scheme in schemes {
+            let model = Gpt2::from_safetensors(&safetensors, config(), Precision::Integers(scheme)).expect("a model");
+            let parts = model.to_tensors().expect("its tensors");
+            let panels = parts.iter().filter(|part| matches!(part.kind, Kind::Panels(_))).count();
+            assert_eq!(panels, 4 * LAYERS + 1);
+            assert!(
+                parts
+                    .iter()
+                    .all(|part| matches!(part.kind, Kind::Panels(_)) || part.kind == floats)
+            );
+            let written = model_file("gpt2-zenz", model.config(), &parts);
+            let parsed = ModelFile::parse(&written).expect("a model file");
+            assert!(parsed.verify());
+            let read = Gpt2::from_file(&parsed).expect("a model");
+            assert_eq!(read.config(), model.config());
+            assert_eq!(read.precision(), Precision::Integers(scheme));
+            assert_eq!(read.to_tensors().expect("its tensors"), parts);
+            let mut expected = vec![0.0f32; ids.len() * VOCABULARY];
+            let mut logits = vec![f32::NAN; ids.len() * VOCABULARY];
+            Session::new(&model, POSITIONS)
+                .feed_all(&ids, &mut expected)
+                .expect("fed");
+            Session::new(&read, POSITIONS).feed_all(&ids, &mut logits).expect("fed");
+            assert_eq!(logits, expected, "{scheme:?}, floats in {floats:?}");
+            let zenz = Zenz::from_file(&parsed).expect("zenz");
+            assert_eq!(zenz.tokenizer.len(), VOCABULARY);
+        }
+    }
+    let bytes = file(&random_tensors);
+    let single = Gpt2::from_safetensors(
+        &SafeTensors::parse(&bytes).expect("a file"),
+        config(),
+        Precision::Single,
+    )
+    .expect("a model");
+    assert!(single.to_tensors().is_err(), "a model in single precision written");
+}
+
+#[test]
+fn a_model_file_of_another_model_is_refused() {
+    let mut random = Random(26);
+    let tensors = tensors(&mut random);
+    let bytes = file(&tensors);
+    let safetensors = SafeTensors::parse(&bytes).expect("a file");
+    let model = Gpt2::from_safetensors(&safetensors, config(), Precision::Integers(Scheme::INT8)).expect("a model");
+    let parts = model.to_tensors().expect("its tensors");
+    let refused = |parts: &[FileTensor<'_>]| {
+        let written = model_file("gpt2-zenz", model.config(), parts);
+        let error = Gpt2::from_file(&ModelFile::parse(&written).expect("a model file")).expect_err("refused");
+        error.to_string()
+    };
+    let without_head: Vec<FileTensor<'_>> = parts
+        .iter()
+        .filter(|part| part.name != "lm_head.weight")
+        .cloned()
+        .collect();
+    assert!(refused(&without_head).contains("lm_head.weight"));
+    let first = "transformer.h.0.attn.c_attn.weight";
+    let replaced = |kind: Kind, bytes: Vec<u8>| -> Vec<FileTensor<'_>> {
+        parts
+            .iter()
+            .map(|part| {
+                if part.name == first {
+                    FileTensor {
+                        kind,
+                        bytes: bytes.clone().into(),
+                        ..part.clone()
+                    }
+                } else {
+                    part.clone()
+                }
+            })
+            .collect()
+    };
+    let floats = replaced(Kind::F32, vec![0; 4 * WIDTH * 3 * WIDTH]);
+    assert!(refused(&floats).contains("not weights in panels"));
+    let wide = Panels {
+        columns: 32,
+        group: 64,
+        bits: 8,
+        fitted: false,
+        rotation: 0,
+    };
+    let length = wide.length(WIDTH, 3 * WIDTH).expect("a length");
+    let other_layout = replaced(Kind::Panels(wide), vec![0; length]);
+    assert!(refused(&other_layout).contains("another layout"));
+    let written = model_file("gpt2-other", model.config(), &parts);
+    let parsed = ModelFile::parse(&written).expect("a model file");
+    assert!(Zenz::from_file(&parsed).is_err(), "another architecture");
 }

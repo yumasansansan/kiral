@@ -17,7 +17,8 @@
 //! quantization's errors allow. Each under several schemes, at depths and
 //! widths that are not multiples of a group, a panel or a rotation, and with
 //! every number of rows a tile of each form may take; the products in every
-//! form the processor runs.
+//! form the processor runs. Packed weights read back from their bytes, as a
+//! model file holds them, are the same weights.
 
 use kiral_cpu::Features;
 use kiral_kernels::Form;
@@ -430,6 +431,55 @@ fn every_number_of_rows_takes_its_tile() {
                     );
                 }
             }
+        }
+    }
+}
+
+#[test]
+fn weights_read_where_they_lie_are_those_packed() {
+    // The packed bytes, as a model file holds them, read back without a copy:
+    // the same weights, and the same products in every form; bytes of another
+    // length than the layer's panels, or a scheme out of range, refused.
+    let mut random = Random(41);
+    let mut rows = Rows::new();
+    let (depth, width, count) = (100, 40, 9);
+    for scheme in SCHEMES {
+        let weights = random.values(depth * width);
+        let packed = Packed::quantize(depth, width, scheme, |k, j| weights[k * width + j]);
+        let bytes = packed.bytes();
+        let read = Packed::from_bytes(depth, width, scheme, bytes).expect("the bytes of the layer's panels");
+        assert_eq!(read, packed);
+        rows.quantize(&random.values(depth * count), depth, scheme.rotation);
+        let bias = random.values(width);
+        for form in forms() {
+            let mut packed_output = vec![0.0f32; count * width];
+            let mut read_output = vec![f32::NAN; count * width];
+            linear_in(form, &rows, &packed, &bias, &mut packed_output);
+            linear_in(form, &rows, &read, &bias, &mut read_output);
+            assert_eq!(read_output, packed_output, "{form}, {scheme:?}");
+        }
+        assert!(Packed::from_bytes(depth, width, scheme, &bytes[1..]).is_none());
+        assert!(Packed::from_bytes(depth + GROUP, width, scheme, bytes).is_none());
+        assert!(Packed::from_bytes(depth, width + PANEL, scheme, bytes).is_none());
+        assert!(Packed::from_bytes(0, width, scheme, &[]).is_none());
+        for refused in [
+            Scheme {
+                weight_bits: 9,
+                ..scheme
+            },
+            Scheme {
+                weight_bits: 1,
+                ..scheme
+            },
+            Scheme {
+                rotation: Rotation::Hadamard(8),
+                ..scheme
+            },
+        ] {
+            assert!(
+                Packed::from_bytes(depth, width, refused, bytes).is_none(),
+                "{refused:?}"
+            );
         }
     }
 }

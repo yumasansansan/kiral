@@ -31,6 +31,7 @@ use crate::ajimee::{self, Item};
 use crate::arguments;
 use crate::eval::{limit, precision_name, scheme_of};
 use crate::metrics::count;
+use crate::model::Source;
 
 const USAGE: &str = "\
 usage: kiral-tools agree --model <directory> [options]
@@ -41,6 +42,9 @@ precision's greedy conversion fed to both, compared at the positions of the
 conversion and at every position.
 
   --model <directory>   zenz as Hugging Face publishes it
+  --quantized <file>    a model file, whose products in integers are compared
+                        rather than those of the directory's weights quantized
+                        when they are read
   --int8                the scheme of eval --int8, the one by default
   --weight-bits <n>     the bits of a weight's integer, 2 to 8 [8]
   --rotate <order>      each block of this many inputs, a power of four,
@@ -81,7 +85,15 @@ struct Compared {
 fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<(), String> {
     let options = arguments::parse(
         arguments,
-        &["model", "items", "limit", "threads", "weight-bits", "rotate"],
+        &[
+            "model",
+            "quantized",
+            "items",
+            "limit",
+            "threads",
+            "weight-bits",
+            "rotate",
+        ],
         &[],
         &["fitted", "int8", "help"],
     )
@@ -98,13 +110,27 @@ fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<(), String> {
     }
     .min(items.len());
     let directory = Zenz::directory_of(&model);
-    let load =
-        |precision| Zenz::load(&directory, precision).map_err(|error| format!("{}: {error}", directory.display()));
-    let single = load(Precision::Single)?;
-    let precision = Precision::Integers(scheme_of(&options)?.unwrap_or(Scheme::INT8));
-    let integers = load(precision)?;
+    let single =
+        Zenz::load(&directory, Precision::Single).map_err(|error| format!("{}: {error}", directory.display()))?;
+    let quantized = options.path("quantized").map(|path| Source::open(&path)).transpose()?;
+    let integers = match &quantized {
+        Some(Source::File(..)) if scheme_of(&options)?.is_some() => {
+            return Err("--quantized names a model file, whose scheme is its own".to_owned());
+        }
+        Some(source @ Source::File(..)) => source.zenz(None)?,
+        Some(Source::Directory(path)) => return Err(format!("--quantized {}: not a model file", path.display())),
+        None => Zenz::load(
+            &directory,
+            Precision::Integers(scheme_of(&options)?.unwrap_or(Scheme::INT8)),
+        )
+        .map_err(|error| format!("{}: {error}", directory.display()))?,
+    };
+    let precision = integers.model.precision();
+    let from = quantized.as_ref().map_or_else(String::new, |source| {
+        format!(", from the model file {}", source.path().display())
+    });
     println!(
-        "agree: AJIMEE-Bench JWTD_v2/v1, {} items, {} against single precision; {threads} threads",
+        "agree: AJIMEE-Bench JWTD_v2/v1, {} items, {}{from} against single precision; {threads} threads",
         items.len(),
         precision_name(precision)
     );
@@ -159,7 +185,12 @@ fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<(), String> {
 }
 
 /// The comparison of every item, the items shared among threads.
-fn compare_all(single: &Zenz, integers: &Zenz, items: &[Item], threads: usize) -> Result<Vec<Compared>, String> {
+fn compare_all(
+    single: &Zenz<'_>,
+    integers: &Zenz<'_>,
+    items: &[Item],
+    threads: usize,
+) -> Result<Vec<Compared>, String> {
     let mut tokens = Vec::new();
     let capacity = items
         .iter()
@@ -209,8 +240,8 @@ fn compare_all(single: &Zenz, integers: &Zenz, items: &[Item], threads: usize) -
 /// conversion fed to both forms at once.
 fn compare(
     converter: &mut Converter<'_>,
-    single: &Zenz,
-    integers: &Zenz,
+    single: &Zenz<'_>,
+    integers: &Zenz<'_>,
     item: &Item,
     capacity: usize,
 ) -> Result<Compared, String> {
@@ -219,7 +250,7 @@ fn compare(
         .map_err(|error| error.to_string())?;
     let sequence = &conversion.sequence;
     let vocabulary = single.model.config().vocabulary;
-    let logits_of = |zenz: &Zenz| -> Result<Vec<f32>, String> {
+    let logits_of = |zenz: &Zenz<'_>| -> Result<Vec<f32>, String> {
         let mut logits = vec![0.0f32; sequence.len() * vocabulary];
         Session::new(&zenz.model, capacity)
             .feed_all(sequence, &mut logits)

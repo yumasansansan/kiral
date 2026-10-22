@@ -23,13 +23,26 @@
 //! point for each row's group, by a scheme that may rotate them first
 //! ([`kiral_kernels::quantized`]); the embeddings, the normalizations, GELU,
 //! attention and its cache, and the residual stream stay in single precision.
+//!
+//! A model is read from a safetensors file of Hugging Face's names
+//! ([`Gpt2::from_safetensors`]), its weights converted, and packed or
+//! quantized, as they are read; or from a model file ([`Gpt2::from_file`]),
+//! which holds a model in integers with its weights quantized and packed
+//! already: the linear layers' and the output layer's weights and the
+//! embeddings are read where they lie, an embedding's row converted when it is
+//! looked up, and only the normalizations' and the biases' floats, 0.5 MB of
+//! zenz's 100, are copied. [`Gpt2::to_tensors`] gives a model in integers'
+//! tensors for its file.
+
+use std::borrow::Cow;
 
 use kiral_kernels::activation::gelu_tanh;
 use kiral_kernels::attention::attention;
 use kiral_kernels::linear::{Packed, linear};
 use kiral_kernels::norm::layer_norm;
-use kiral_kernels::quantized::{self, Rows, Scheme};
+use kiral_kernels::quantized::{self, Rotation, Rows, Scheme};
 use kiral_kernels::vector::{add, logits};
+use kiral_model::file::{Floats, Kind, ModelFile, Panels, Tensor};
 use kiral_model::json::{Object, Value};
 use kiral_model::safetensors::SafeTensors;
 
@@ -112,12 +125,73 @@ impl Config {
         })
     }
 
+    /// The configuration of a model file, as [`Config::to_bytes`] lays it out,
+    /// its sizes checked as [`Config::from_json`] checks them.
+    ///
+    /// # Errors
+    ///
+    /// Where the bytes are not [`CONFIG_BYTES`], a size is 0, the heads do not
+    /// divide the width, or the epsilon is not between 0 and 1.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, Error> {
+        let numbers: &[u8; CONFIG_BYTES] = bytes
+            .try_into()
+            .map_err(|_| Error::Config(format!("{} bytes of configuration, not {CONFIG_BYTES}", bytes.len())))?;
+        let numbers = numbers.as_chunks::<4>().0;
+        let names = ["blocks", "heads", "width", "positions", "vocabulary"];
+        let size = |at: usize| {
+            usize::try_from(u32::from_le_bytes(numbers[at]))
+                .ok()
+                .filter(|&size| size > 0)
+                .ok_or_else(|| Error::Config(format!("no {} that is a positive integer", names[at])))
+        };
+        let config = Self {
+            layers: size(0)?,
+            heads: size(1)?,
+            width: size(2)?,
+            positions: size(3)?,
+            vocabulary: size(4)?,
+            epsilon: f32::from_le_bytes(numbers[5]),
+        };
+        if !config.width.is_multiple_of(config.heads) {
+            return Err(Error::Config(format!(
+                "{} heads that do not divide the width {}",
+                config.heads, config.width
+            )));
+        }
+        if !(config.epsilon > 0.0 && config.epsilon < 1.0) {
+            return Err(Error::Config("no epsilon between 0 and 1".to_owned()));
+        }
+        Ok(config)
+    }
+
+    /// The configuration's bytes in a model file: the blocks, the heads, the
+    /// width, the positions and the vocabulary, four bytes each, and the
+    /// epsilon in single precision.
+    ///
+    /// # Errors
+    ///
+    /// Where a size passes 32 bits.
+    pub fn to_bytes(&self) -> Result<[u8; CONFIG_BYTES], Error> {
+        let mut bytes = [0; CONFIG_BYTES];
+        let sizes = [self.layers, self.heads, self.width, self.positions, self.vocabulary];
+        for (number, size) in bytes.as_chunks_mut::<4>().0.iter_mut().zip(sizes) {
+            *number = u32::try_from(size)
+                .map_err(|_| Error::Config(format!("the size {size}, past 32 bits")))?
+                .to_le_bytes();
+        }
+        bytes[20..].copy_from_slice(&self.epsilon.to_le_bytes());
+        Ok(bytes)
+    }
+
     /// The width of a head.
     #[must_use]
     pub fn head_width(&self) -> usize {
         self.width / self.heads
     }
 }
+
+/// The bytes of a configuration in a model file.
+pub const CONFIG_BYTES: usize = 24;
 
 /// A layer normalization's gain and bias.
 #[derive(Debug, Clone)]
@@ -146,19 +220,19 @@ pub enum Precision {
 
 /// A linear layer's weights, packed for the kernel of its precision.
 #[derive(Debug, Clone)]
-enum Weights {
+enum Weights<'a> {
     Single(Packed),
-    Int8(quantized::Packed),
+    Int8(quantized::Packed<'a>),
 }
 
 /// A linear layer: its weights and its bias.
 #[derive(Debug, Clone)]
-struct Linear {
-    weight: Weights,
+struct Linear<'a> {
+    weight: Weights<'a>,
     bias: Vec<f32>,
 }
 
-impl Linear {
+impl Linear<'_> {
     /// `output = input weight + bias`, `rows` the room the input is quantized
     /// in, for weights in integers.
     fn apply(&self, input: &[f32], rows: &mut Rows, output: &mut [f32]) {
@@ -199,37 +273,71 @@ impl Room {
 
 /// A block of the decoder.
 #[derive(Debug, Clone)]
-struct Block {
+struct Block<'a> {
     attention_norm: Norm,
     /// The width to the queries, keys and values of every head.
-    attention: Linear,
+    attention: Linear<'a>,
     /// What the heads found, back to the width.
-    projection: Linear,
+    projection: Linear<'a>,
     expansion_norm: Norm,
     /// The width to four times the width.
-    expansion: Linear,
+    expansion: Linear<'a>,
     /// Four times the width back to the width.
-    contraction: Linear,
+    contraction: Linear<'a>,
 }
 
-/// A GPT-2's weights.
+/// An embedding: a row of floats for each token, or each position.
 #[derive(Debug, Clone)]
-pub struct Gpt2 {
+enum Table<'a> {
+    /// Converted to single precision when it was read.
+    Single(Vec<f32>),
+    /// Read where it lies in a model file, a row converted when it is looked
+    /// up.
+    File(Floats<'a>),
+}
+
+impl Table<'_> {
+    /// Writes the row `index` of `output.len()` floats into `output`.
+    fn row(&self, index: usize, output: &mut [f32]) {
+        let width = output.len();
+        match self {
+            Self::Single(values) => output.copy_from_slice(&values[index * width..][..width]),
+            Self::File(floats) => floats.read(index * width, output),
+        }
+    }
+
+    /// Every float, in single precision.
+    fn to_vec(&self) -> Vec<f32> {
+        match self {
+            Self::Single(values) => values.clone(),
+            Self::File(floats) => floats.to_vec(),
+        }
+    }
+}
+
+/// A GPT-2's weights: its own, or read where they lie in a model file.
+#[derive(Debug, Clone)]
+pub struct Gpt2<'a> {
     config: Config,
     precision: Precision,
-    token_embedding: Vec<f32>,
-    position_embedding: Vec<f32>,
-    blocks: Vec<Block>,
+    token_embedding: Table<'a>,
+    position_embedding: Table<'a>,
+    blocks: Vec<Block<'a>>,
     final_norm: Norm,
     /// The output layer in integers, at eight bits, the token embedding's rows
     /// its columns; none in single precision, which takes the embedding as it
     /// is.
-    head: Option<quantized::Packed>,
+    head: Option<quantized::Packed<'a>>,
     /// The output layer's bias, which GPT-2 has not: zeros.
     head_bias: Vec<f32>,
 }
 
-impl Gpt2 {
+/// The name of a block's tensor, Hugging Face's.
+fn block_name(layer: usize, part: &str) -> String {
+    format!("transformer.h.{layer}.{part}")
+}
+
+impl Gpt2<'static> {
     /// The model of a safetensors file of Hugging Face's names, its weights
     /// converted to single precision, and the linear layers' and the output
     /// layer's quantized for [`Precision::Integers`]. An output layer of its
@@ -277,7 +385,7 @@ impl Gpt2 {
         };
         let blocks = (0..config.layers)
             .map(|layer| {
-                let name = |part: &str| format!("transformer.h.{layer}.{part}");
+                let name = |part: &str| block_name(layer, part);
                 Ok(Block {
                     attention_norm: norm(&name("ln_1"))?,
                     attention: linear(&name("attn.c_attn"), width, 3 * width)?,
@@ -316,15 +424,260 @@ impl Gpt2 {
         Ok(Self {
             config,
             precision,
-            token_embedding,
-            position_embedding: tensor("transformer.wpe.weight", &[config.positions, width])?,
+            token_embedding: Table::Single(token_embedding),
+            position_embedding: Table::Single(tensor("transformer.wpe.weight", &[config.positions, width])?),
             blocks,
             final_norm: norm("transformer.ln_f")?,
             head,
             head_bias: vec![0.0; config.vocabulary],
         })
     }
+}
 
+/// The scheme of weights in panels of the kernels' layout; none for another
+/// layout.
+fn scheme_of(panels: &Panels) -> Option<Scheme> {
+    if usize::from(panels.columns) != quantized::PANEL || usize::from(panels.group) != quantized::GROUP {
+        return None;
+    }
+    Some(Scheme {
+        weight_bits: u32::from(panels.bits),
+        rotation: match panels.rotation {
+            0 => Rotation::None,
+            order => Rotation::Hadamard(usize::try_from(order).ok()?),
+        },
+        fitted: panels.fitted,
+    })
+}
+
+/// The layout and scheme of weights packed by the kernels, as a model file
+/// gives them.
+fn panels_of(scheme: Scheme) -> Result<Panels, Error> {
+    let failed = || Error::Config(format!("a scheme a model file does not hold: {scheme:?}"));
+    Ok(Panels {
+        columns: u16::try_from(quantized::PANEL).map_err(|_| failed())?,
+        group: u16::try_from(quantized::GROUP).map_err(|_| failed())?,
+        bits: u8::try_from(scheme.weight_bits).map_err(|_| failed())?,
+        fitted: scheme.fitted,
+        rotation: match scheme.rotation {
+            Rotation::None => 0,
+            Rotation::Hadamard(order) => u32::try_from(order).map_err(|_| failed())?,
+        },
+    })
+}
+
+/// A tensor of a model as a model file holds it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileTensor<'m> {
+    /// Its name, Hugging Face's.
+    pub name: String,
+    /// What its bytes hold.
+    pub kind: Kind,
+    /// Its shape.
+    pub shape: Vec<usize>,
+    /// Its bytes: packed weights' where they lie, or floats'.
+    pub bytes: Cow<'m, [u8]>,
+}
+
+impl<'m> FileTensor<'m> {
+    /// Weights in panels, as the kernels packed them, where they lie.
+    fn panels(name: String, weight: &'m quantized::Packed<'_>) -> Result<Self, Error> {
+        Ok(Self {
+            name,
+            kind: Kind::Panels(panels_of(weight.scheme())?),
+            shape: vec![weight.depth(), weight.width()],
+            bytes: Cow::Borrowed(weight.bytes()),
+        })
+    }
+
+    /// The tensor as the writer of model files takes it.
+    #[must_use]
+    pub fn tensor(&self) -> Tensor<'_> {
+        Tensor {
+            name: &self.name,
+            kind: self.kind,
+            shape: self.shape.clone(),
+            bytes: &self.bytes,
+        }
+    }
+
+    /// Floats as a model file holds them: in bfloat16 where every one of them
+    /// is one, which loses nothing, and in single precision otherwise.
+    fn floats(name: String, shape: Vec<usize>, values: &[f32]) -> Self {
+        // A bfloat16 is a float of single precision whose lower 16 bits are 0.
+        let (kind, bytes) = if values.iter().all(|value| value.to_bits().trailing_zeros() >= 16) {
+            let bytes = values
+                .iter()
+                .flat_map(|value| {
+                    let [low, high, _, _] = (value.to_bits() >> 16).to_le_bytes();
+                    [low, high]
+                })
+                .collect();
+            (Kind::Bf16, bytes)
+        } else {
+            (Kind::F32, values.iter().flat_map(|value| value.to_le_bytes()).collect())
+        };
+        Self {
+            name,
+            kind,
+            shape,
+            bytes: Cow::Owned(bytes),
+        }
+    }
+}
+
+impl<'a> Gpt2<'a> {
+    /// The model of a model file: its linear layers' and output layer's
+    /// weights and its embeddings read where they lie, its normalizations and
+    /// biases converted to single precision. Its precision is integers, by the
+    /// scheme of its first block's first layer.
+    ///
+    /// # Errors
+    ///
+    /// Where the configuration is not one, or a tensor is missing, of another
+    /// shape than the configuration's or of another type than the format gives
+    /// it, or in panels of another layout than the kernels'.
+    pub fn from_file(file: &ModelFile<'a>) -> Result<Self, Error> {
+        let config = Config::from_bytes(file.configuration())?;
+        let width = config.width;
+        let tensor = |name: &str, shape: &[usize]| -> Result<&Tensor<'a>, Error> {
+            let tensor = file
+                .tensor(name)
+                .ok_or_else(|| Error::Tensor(format!("no tensor {name}")))?;
+            if tensor.shape != shape {
+                return Err(Error::Tensor(format!(
+                    "{name} of shape {:?}, not {shape:?}",
+                    tensor.shape
+                )));
+            }
+            Ok(tensor)
+        };
+        let floats = |name: &str, shape: &[usize]| -> Result<Floats<'a>, Error> {
+            tensor(name, shape)?
+                .floats()
+                .ok_or_else(|| Error::Tensor(format!("{name}, not floats")))
+        };
+        let norm = |name: &str| -> Result<Norm, Error> {
+            Ok(Norm {
+                gain: floats(&format!("{name}.weight"), &[width])?.to_vec(),
+                bias: floats(&format!("{name}.bias"), &[width])?.to_vec(),
+            })
+        };
+        let panels = |name: &str, inputs: usize, outputs: usize| -> Result<quantized::Packed<'a>, Error> {
+            let tensor = tensor(name, &[inputs, outputs])?;
+            let Kind::Panels(panels) = tensor.kind else {
+                return Err(Error::Tensor(format!("{name}, not weights in panels")));
+            };
+            let scheme = scheme_of(&panels)
+                .ok_or_else(|| Error::Tensor(format!("{name}, in panels of another layout than the kernels'")))?;
+            quantized::Packed::from_bytes(inputs, outputs, scheme, tensor.bytes)
+                .ok_or_else(|| Error::Tensor(format!("{name}, not the bytes of its panels")))
+        };
+        let linear = |name: &str, inputs: usize, outputs: usize| -> Result<Linear<'a>, Error> {
+            Ok(Linear {
+                weight: Weights::Int8(panels(&format!("{name}.weight"), inputs, outputs)?),
+                bias: floats(&format!("{name}.bias"), &[outputs])?.to_vec(),
+            })
+        };
+        let blocks = (0..config.layers)
+            .map(|layer| {
+                let name = |part: &str| block_name(layer, part);
+                Ok(Block {
+                    attention_norm: norm(&name("ln_1"))?,
+                    attention: linear(&name("attn.c_attn"), width, 3 * width)?,
+                    projection: linear(&name("attn.c_proj"), width, width)?,
+                    expansion_norm: norm(&name("ln_2"))?,
+                    expansion: linear(&name("mlp.c_fc"), width, 4 * width)?,
+                    contraction: linear(&name("mlp.c_proj"), 4 * width, width)?,
+                })
+            })
+            .collect::<Result<Vec<_>, Error>>()?;
+        let first = panels(&block_name(0, "attn.c_attn.weight"), width, 3 * width)?;
+        Ok(Self {
+            config,
+            precision: Precision::Integers(first.scheme()),
+            token_embedding: Table::File(floats("transformer.wte.weight", &[config.vocabulary, width])?),
+            position_embedding: Table::File(floats("transformer.wpe.weight", &[config.positions, width])?),
+            blocks,
+            final_norm: norm("transformer.ln_f")?,
+            head: Some(panels("lm_head.weight", width, config.vocabulary)?),
+            head_bias: vec![0.0; config.vocabulary],
+        })
+    }
+
+    /// The model's tensors as a model file holds them, by Hugging Face's names,
+    /// in the order the file lays them out: the embeddings, the blocks', the
+    /// last normalization's, and the output layer's, as [`Gpt2::from_file`]
+    /// reads them. The weights of the linear layers and of the output layer are
+    /// the packed bytes, where they lie; the other tensors' floats are in
+    /// bfloat16 where every one of them is one, as zenz-v3.1's are, and in
+    /// single precision otherwise.
+    ///
+    /// # Errors
+    ///
+    /// Where the model is in single precision: a model file holds a model in
+    /// integers.
+    pub fn to_tensors(&self) -> Result<Vec<FileTensor<'_>>, Error> {
+        let single = || Error::Config("a model in single precision, which a model file does not hold".to_owned());
+        let Some(head) = &self.head else {
+            return Err(single());
+        };
+        let Config {
+            width,
+            positions,
+            vocabulary,
+            ..
+        } = self.config;
+        let mut tensors = vec![
+            FileTensor::floats(
+                "transformer.wte.weight".to_owned(),
+                vec![vocabulary, width],
+                &self.token_embedding.to_vec(),
+            ),
+            FileTensor::floats(
+                "transformer.wpe.weight".to_owned(),
+                vec![positions, width],
+                &self.position_embedding.to_vec(),
+            ),
+        ];
+        let norm = |tensors: &mut Vec<FileTensor<'_>>, name: &str, norm: &Norm| {
+            tensors.push(FileTensor::floats(format!("{name}.weight"), vec![width], &norm.gain));
+            tensors.push(FileTensor::floats(format!("{name}.bias"), vec![width], &norm.bias));
+        };
+        for (layer, block) in self.blocks.iter().enumerate() {
+            let name = |part: &str| block_name(layer, part);
+            norm(&mut tensors, &name("ln_1"), &block.attention_norm);
+            for (part, linear) in [("attn.c_attn", &block.attention), ("attn.c_proj", &block.projection)] {
+                let Weights::Int8(weight) = &linear.weight else {
+                    return Err(single());
+                };
+                tensors.push(FileTensor::panels(name(&format!("{part}.weight")), weight)?);
+                tensors.push(FileTensor::floats(
+                    name(&format!("{part}.bias")),
+                    vec![linear.bias.len()],
+                    &linear.bias,
+                ));
+            }
+            norm(&mut tensors, &name("ln_2"), &block.expansion_norm);
+            for (part, linear) in [("mlp.c_fc", &block.expansion), ("mlp.c_proj", &block.contraction)] {
+                let Weights::Int8(weight) = &linear.weight else {
+                    return Err(single());
+                };
+                tensors.push(FileTensor::panels(name(&format!("{part}.weight")), weight)?);
+                tensors.push(FileTensor::floats(
+                    name(&format!("{part}.bias")),
+                    vec![linear.bias.len()],
+                    &linear.bias,
+                ));
+            }
+        }
+        norm(&mut tensors, "transformer.ln_f", &self.final_norm);
+        tensors.push(FileTensor::panels("lm_head.weight".to_owned(), head)?);
+        Ok(tensors)
+    }
+}
+
+impl Gpt2<'_> {
     /// Its sizes.
     #[must_use]
     pub fn config(&self) -> &Config {
@@ -342,7 +695,7 @@ impl Gpt2 {
 /// keys and values of its positions, and the room to compute in.
 #[derive(Debug)]
 pub struct Session<'m> {
-    model: &'m Gpt2,
+    model: &'m Gpt2<'m>,
     /// The positions whose keys and values are in the cache.
     length: usize,
     /// The positions the cache has room for.
@@ -361,7 +714,7 @@ impl<'m> Session<'m> {
     ///
     /// Where `capacity` is more than the positions of the model.
     #[must_use]
-    pub fn new(model: &'m Gpt2, capacity: usize) -> Self {
+    pub fn new(model: &'m Gpt2<'m>, capacity: usize) -> Self {
         let config = model.config;
         assert!(
             capacity <= config.positions,
@@ -486,11 +839,14 @@ impl<'m> Session<'m> {
             room.quantized.quantize(&hidden, config.width, head.scheme().rotation);
             quantized::linear(&room.quantized, head, &model.head_bias, output);
         } else {
+            let Table::Single(embedding) = &model.token_embedding else {
+                unreachable!("a model in single precision, which a model file does not hold, read from one");
+            };
             for (hidden, output) in hidden
                 .chunks_exact(config.width)
                 .zip(output.chunks_exact_mut(config.vocabulary))
             {
-                logits(hidden, &model.token_embedding, output);
+                logits(hidden, embedding, output);
             }
         }
     }
@@ -502,23 +858,22 @@ impl<'m> Session<'m> {
         let config = model.config;
         let width = config.width;
         let mut stream = vec![0.0f32; tokens.len() * width];
+        let mut position = vec![0.0f32; width];
         for (row, (&token, embedded)) in tokens.iter().zip(stream.chunks_exact_mut(width)).enumerate() {
             let token = usize::try_from(token)
                 .ok()
                 .filter(|&token| token < config.vocabulary)
                 .ok_or_else(|| Error::Input(format!("the token {token}, out of the vocabulary")))?;
-            embedded.copy_from_slice(&model.token_embedding[token * width..][..width]);
-            add(
-                embedded,
-                &model.position_embedding[(self.length + row) * width..][..width],
-            );
+            model.token_embedding.row(token, embedded);
+            model.position_embedding.row(self.length + row, &mut position);
+            add(embedded, &position);
         }
         Ok(stream)
     }
 
     /// A block of the decoder on the stream of the rows fed, whose keys and
     /// values it caches.
-    fn block(&mut self, layer: usize, block: &Block, stream: &mut [f32], room: &mut Room) {
+    fn block(&mut self, layer: usize, block: &Block<'_>, stream: &mut [f32], room: &mut Room) {
         let epsilon = self.model.config.epsilon;
         block.attention_norm.apply(stream, epsilon, &mut room.normalized);
         block

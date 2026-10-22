@@ -32,7 +32,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
   200 項目の変換は，KIRAL のコードとは別に NumPy で倍精度で書いた同じネットワークの変換とすべて一致します．
 
-  整数（`--int8`）では，線形層と出力層の重みをモデルを読むときにバイトへ量子化し（出力ごと・入力 64 個のグループごとにスケール），入力は来るたびに量子化します（トークンごと・グループごとにスケールとゼロ点．`kiral_kernels::quantized`，並びは stable-diffusion.assembly の `bits=8` と同じ）．グループの積は 32 ビットで正確に足し合わせます．Acc@1 87.0，CER 1.58 で，正解の項目は単精度と同じです（変わった変換は 200 のうち 1 つで，どちらでも誤り）．`kiral-tools agree` は各項目のプロンプトと単精度による変換を両方に与え，変換の各位置で次に最も確からしいトークンを比べます（ドラフトの検証が依存するものです）．4396 位置のうち 4395 が一致します．
+  整数（`--int8`）では，線形層と出力層の重みをモデルを読むときに（あるいは一度だけモデルファイルへ．下記）バイトへ量子化し（出力ごと・入力 64 個のグループごとにスケール），入力は来るたびに量子化します（トークンごと・グループごとにスケールとゼロ点．`kiral_kernels::quantized`，並びは stable-diffusion.assembly の `bits=8` と同じ）．グループの積は 32 ビットで正確に足し合わせます．Acc@1 87.0，CER 1.58 で，正解の項目は単精度と同じです（変わった変換は 200 のうち 1 つで，どちらでも誤り）．`kiral-tools agree` は各項目のプロンプトと単精度による変換を両方に与え，変換の各位置で次に最も確からしいトークンを比べます（ドラフトの検証が依存するものです）．4396 位置のうち 4395 が一致します．
 
   ビット数を減らすには工夫が要ります．方式は，ConvRot が拡散トランスフォーマーで行うように，層の入力の各ブロックを正則アダマール行列（各行・各列の和が次数の平方根になるので，行の大きな値が足し合わさらずに散らばる）で回転し（重みは詰めるときに，入力はその場で），各グループのスケールを二乗誤差が最小のものに当てはめられます．出力層は 8 ビットのまま残します．変換の位置で単精度と一致する数（4396 のうち）：
 
@@ -61,6 +61,17 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
   このプロセッサが使う AVX-VNNI の `vpdpbusd` では，プロンプトは単精度の P コアで約 6 分の 1，E コアで約 3 分の 1 の時間で，デコードの 1 ステップは約 3 分の 1 と 2 分の 1 です（1 ステップはすべての重みを読みます．単精度で 340 MB，バイトではその 4 分の 1 です）．VNNI を持たないプロセッサ向けの可搬な形は，プロンプトでは単精度の 2 倍，1 ステップでは同じくらいの時間がかかります．
 
+- KIRAL のモデルファイル（[docs/MODEL-FORMAT.md](docs/MODEL-FORMAT.md)）：`kiral-tools model convert` は整数の zenz を 1 つのファイルに書き出します．設定，トークナイザ，カーネルが読む並びに量子化して詰めた重み（各テンソルはキャッシュのラインの境界から始まります）に加えて，重みのライセンスとその表示，ファイル自身の SHA-256 を持ち，`kiral-tools model check` がそれを検査します．読み込みはファイルのマップです（`kiral-sys`）．重みはファイルのままの場所で読み，埋め込みの行は引くときに単精度に変換し，コピーするのは正規化とバイアスの 0.5 MB だけです．zenz-v3.1-small のファイルは 111.9 MB（bfloat16 の safetensors は 180.9 MB）で，AJIMEE-Bench の変換は safetensors を読むときに量子化したものと完全に同じです（Acc@1 87.0，変わった変換なし，単精度との一致は 4396 位置のうち 4395）．`kiral-tools bench load` による時間（10 回の読み込み，それぞれの後に最初の項目のプロンプトを 2 回与える．i7-1360P）：
+
+  | 2 回ずつ | 読み込み p50 | 読み込み後の最初のプロンプト p50 | 2 回目のプロンプト p50 |
+  | --- | ---: | ---: | ---: |
+  | モデルファイル，P コア（CPU 0，4.6 GHz） | 0.46〜0.49 ms | 55.6〜55.9 ms | 54.9〜55.7 ms |
+  | safetensors を読んで量子化，P コア（4.4〜4.9 GHz） | 467〜535 ms | 55.6〜59.0 ms | 55.5〜58.6 ms |
+  | モデルファイル，E コア（CPU 8，3.70 GHz） | 1.23〜1.25 ms | 178.9〜180.0 ms | 178.1〜178.9 ms |
+  | safetensors を読んで量子化，E コア | 637〜646 ms | 179.3〜180.9 ms | 178.8〜179.4 ms |
+
+  71 トークンのプロンプトはすべての重みを読みます．読み込み後の最初のプロンプトは，マップしたファイルのページを触れるたびにシステムのファイルキャッシュから取り込みますが，2 回目との差は 0.2〜1.2 ms で，safetensors を読んだ後の差（0.1〜1.5 ms）と変わりません．`bench model` の項目の変換でも，マップしたファイルはメモリに量子化した重みと同じ速さで，差は実行ごとのばらつきの範囲です（デコードの 1 ステップの中央値は P コアで 5.3〜5.4 ms と 5.6〜5.9 ms，E コアで 10.0〜11.1 ms と 10.2〜11.9 ms．P コアのクロックは実行の中央値で 4.1〜4.9 GHz）．
+
 - Mozc は，使われるとおりに測ります．`kiral-tools eval --mozc` は，実行のためだけの Mozc（実行ごとに作って後で消すプロファイル．利用者自身の Mozc には何も学習させません）に，`mozc_emacs_helper` を通して読みをローマ字で 1 キーずつ打ち込み，打ったものが読みと一致することを確かめてから Space で変換し，取り消します．Mozc 2.29 は Acc@1 47.5，CER 7.91（左文脈あり 43.0 / 10.29．Mozc は左文脈を受け取りません．左文脈なし 52.0 / 5.54）です．`kiral-tools replay --mozc --cpu p0 --cpu e0` は，実行を P コアに，次に E コアに固定し（`kiral-sys`，`kiral-cpu`），クロックを読みながら，各キーと各変換の時間を測ります．i7-1360P での，Mozc の IPC を通した応答の時間：
 
   | Mozc 2.29 | キー p50 | p99 | 変換 p50 | p99 |
@@ -86,7 +97,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 - 単精度のカーネル（`kiral-kernels`）：パネルにパックした重みによる線形層，LayerNorm，GELU，softmax，キャッシュに対する attention を，コンパイラがベクトル化するシンプルな Rust で書いています．どれも倍精度と比べてテストし，誤差を丸めの解析から導いた上界に収めています．長さはベクトルの幅の倍数でないものを使います．
 - AVX-VNNI のアセンブリによる整数の積（`crates/kiral-kernels/asm/x86_64/qgemm_avx_vnni.S`）．最初のアセンブリの形です．1〜6 行×16 列のタイルで，`vpdpbusd` がバイトの積 4 つを 1 レーンに足します．3 行以下では和を 2 組に分け，2 倍の連鎖を並べて走らせます．可搬な形と同じく行数ごとに倍精度と比べてテストし，プロセッサが AVX-VNNI を持ち環境が許すところで使います．16〜40 行で，i7-1360P の P コアで 179〜205 GMAC/s（可搬な形は 8〜10），E コアで 46〜48（可搬な形は 6.3〜6.7）です（`kiral-tools bench kernels`）．
 - 命令セットのレベル（`kiral-cpu`）：std の検出によるレベルと，その中からの選択です．`KIRAL_ISA=<レベル>` と `KIRAL_KERNELS=portable` で選択を抑えられます．
-- 手書きの safetensors と JSON の読み取り（`kiral-model`）：どんなバイト列も受け付け，読めないものはパニックではなくエラーにします．
+- 手書きの KIRAL のモデルファイル，safetensors，JSON の読み取りと SHA-256（`kiral-model`）：読み取りはどんなバイト列も受け付け，読めないものはパニックではなくエラーにします．
 
 crates.io からは何も取得しません．形式はすべて手で解析し，Cargo.lock にはワークスペース自身のクレートしか載りません．
 
@@ -131,6 +142,18 @@ cargo run --release --locked -p kiral-tools -- bench model --model data/zenz-v3.
 ```
 
 ```bash
+cargo run --release --locked -p kiral-tools -- model convert --model data/zenz-v3.1-small --output data/models/zenz-v3.1-small-int8.kmdl --source "zenz-v3.1-small by Keita Miwa, fine-tuned from ku-nlp's gpt2-small-japanese-char: https://huggingface.co/Miwa-Keita/zenz-v3.1-small, revision 344612e331bf3ba752a9bfef6633c93c6b933ebb"
+```
+
+```bash
+cargo run --release --locked -p kiral-tools -- eval --model data/models/zenz-v3.1-small-int8.kmdl
+```
+
+```bash
+cargo run --release --locked -p kiral-tools -- bench load --model data/models/zenz-v3.1-small-int8.kmdl --cpu p0 --cpu e0
+```
+
+```bash
 python3 scripts/fetch_datasets.py fetch mozc-dictionary sudachi-dictionary
 ```
 
@@ -154,10 +177,10 @@ cargo run --release --locked -p kiral-tools -- eval --mozc
 cargo run --release --locked -p kiral-tools -- replay --mozc --cpu p0 --cpu e0
 ```
 
-このスクリプトは AJIMEE-Bench，zenz-v3.1-small，Mozc の辞書，SudachiDict を固定のリビジョンから `data/`（コミットしない）に取得し，`scripts/datasets.sha256` に記録した SHA-256 と照合します．`list` で取得元と利用条件を表示します．`dict build` は，`--sudachi` なしでは Mozc の辞書だけで，`--lists small_lex.csv,core_lex.csv,notcore_lex.csv` では SudachiDict のすべてのリストを加えて作ります．各実行の結果は `bench/results/` に保存し，比較の基準となる数値は `bench/baselines.toml` にあります．Mozc の計測は Linux で，ヘルパーのためにパッケージ `emacs-mozc-bin` を入れて行います．
+このスクリプトは AJIMEE-Bench，zenz-v3.1-small，Mozc の辞書，SudachiDict を固定のリビジョンから `data/`（コミットしない）に取得し，`scripts/datasets.sha256` に記録した SHA-256 と照合します．`list` で取得元と利用条件を表示します．`model convert` は整数の zenz を `data/models/` に書き出します．`--source` は重みの出所で，ファイルの表示に入ります．`--model` は zenz のディレクトリを受け取るところならどこでもこのファイルを受け取ります（`agree` では `--quantized`）．`dict build` は，`--sudachi` なしでは Mozc の辞書だけで，`--lists small_lex.csv,core_lex.csv,notcore_lex.csv` では SudachiDict のすべてのリストを加えて作ります．各実行の結果は `bench/results/` に保存し，比較の基準となる数値は `bench/baselines.toml` にあります．Mozc の計測は Linux で，ヘルパーのためにパッケージ `emacs-mozc-bin` を入れて行います．
 
 ## ライセンス
 
 KIRAL のコードは GNU General Public License バージョン 3 またはそれ以降のバージョン（`LICENSES/GPL-3.0-or-later.txt`）です．各ファイルは [REUSE](https://reuse.software/) 仕様の形式で著作権者とライセンスを示し，`reuse lint` で検査しています．
 
-モデルとデータはリポジトリに含めません．それぞれの提供元のライセンスに従う別のファイルで，計測する人が取得します．zenz-v3.1-small は CC BY-SA 4.0（Keita Miwa 氏，ku-nlp の gpt2-small-japanese-char（CC BY-SA 4.0）からのファインチューニング），AJIMEE-Bench のデータは京都大学の日本語 Wikipedia 入力誤りデータセット (v2) に由来する CC BY-SA 3.0 です．Mozc のオープンソース辞書は IPAdic の条件に従い，Google の追加分は Mozc の BSD-3-Clause，沖縄辞書の語はパブリックドメインです．SudachiDict は Apache License 2.0（Works Applications）で，含まれる UniDic の部分は UniDic の BSD-3-Clause に従い，NEologd に由来する語はその出典を示しています．これらから作った辞書ファイルも同じ条件に従い，その表示をファイルの中に持ちます．
+モデルとデータはリポジトリに含めません．それぞれの提供元のライセンスに従う別のファイルで，計測する人が取得します．zenz-v3.1-small は CC BY-SA 4.0（Keita Miwa 氏，ku-nlp の gpt2-small-japanese-char（CC BY-SA 4.0）からのファインチューニング），AJIMEE-Bench のデータは京都大学の日本語 Wikipedia 入力誤りデータセット (v2) に由来する CC BY-SA 3.0 です．Mozc のオープンソース辞書は IPAdic の条件に従い，Google の追加分は Mozc の BSD-3-Clause，沖縄辞書の語はパブリックドメインです．SudachiDict は Apache License 2.0（Works Applications）で，含まれる UniDic の部分は UniDic の BSD-3-Clause に従い，NEologd に由来する語はその出典を示しています．これらから作った辞書ファイルも同じ条件に従い，その表示をファイルの中に持ちます．zenz-v3.1-small から作ったモデルファイルも CC BY-SA 4.0 に従い，重みの出所と変更点の表示をファイルの中に持ちます．

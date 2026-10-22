@@ -21,8 +21,16 @@
 //! median, the 99th percentile and the longest, with the clock
 //! ([`crate::pinned`]). The first item is converted once before the times are
 //! taken, while the weights come into the caches.
+//!
+//! `bench load` loads zenz anew, as many times as asked, and feeds the first
+//! item's prompt after each load and once more: a directory's weights read and
+//! quantized, or a model file mapped and its tables checked, and then the
+//! first prompt, which touches every weight -- a mapped file's pages come in
+//! from the system's cache of the file as they are first touched -- against the
+//! second, whose weights are all in place.
 
 use std::ffi::OsString;
+use std::path::Path;
 use std::process::ExitCode;
 use std::time::{Duration, Instant};
 
@@ -31,17 +39,19 @@ use kiral_cpu::topology::{self, Topology};
 use kiral_kernels::Form;
 use kiral_kernels::quantized::{self, Packed, Rotation, Rows, Scheme};
 use kiral_kernels::vector::argmax;
-use kiral_nn::gpt2::{Precision, Session};
+use kiral_nn::gpt2::Session;
 use kiral_nn::zenz::{Zenz, prompt, tag_in};
 
 use crate::ajimee::{self, Item};
 use crate::arguments;
 use crate::eval::{limit, precision_name, scheme_of};
+use crate::model::Source;
 use crate::pinned::{place, print_times, processors, run_on};
 
 const USAGE: &str = "\
 usage: kiral-tools bench kernels [options]
-       kiral-tools bench model --model <directory> [options]
+       kiral-tools bench model --model <path> [options]
+       kiral-tools bench load --model <path> [options]
 
 The time of the products in integers of zenz's layers -- 768 inputs to 2304, to
 768, to 3072 and to 6000 outputs, and 3072 to 768 -- on random weights and
@@ -59,8 +69,9 @@ another on one thread: each prompt fed at once, and each step of decoding after
 it; the median, the 99th percentile and the longest, on each processor asked
 for, with the clock it ran at.
 
-  --model <directory>   zenz as Hugging Face publishes it
-  --int8                zenz's products in integers [single precision]
+  --model <path>        zenz as Hugging Face publishes it, or a model file
+  --int8                zenz's products in integers, for a directory [single
+                        precision]
   --weight-bits <n>     the bits of a weight's integer, 2 to 8 [8]
   --rotate <order>      each block of this many inputs, a power of four,
                         rotated first by a regular Hadamard matrix [none]
@@ -70,7 +81,22 @@ for, with the clock it ran at.
                         p<n> the n-th performance core, e<n> the n-th
                         efficiency core, or the system's number [none: unpinned]
   --items <file>        the items [data/ajimee/evaluation_items.json]
-  --limit <n>           the first n items only";
+  --limit <n>           the first n items only
+
+
+The time to load zenz -- a directory's weights read, and quantized for --int8,
+or a model file mapped and its tables checked -- and then to feed the first
+item's prompt, which touches every weight, and to feed it once more; on each
+processor asked for, as many times as asked, each a load anew.
+
+  --model <path>        zenz as Hugging Face publishes it, or a model file
+  --int8, --weight-bits, --rotate, --fitted
+                        the scheme of a directory's products in integers, as
+                        for bench model
+  --loads <n>           the loads [10]
+  --cpu <processor>     a processor to pin the run to, again for another run
+  --items <file>        the items, whose first gives the prompt
+                        [data/ajimee/evaluation_items.json]";
 
 /// Runs the command.
 pub fn main(mut arguments: impl Iterator<Item = OsString>) -> ExitCode {
@@ -78,6 +104,7 @@ pub fn main(mut arguments: impl Iterator<Item = OsString>) -> ExitCode {
     let result = match what.as_deref() {
         Some("kernels") => kernels(arguments),
         Some("model") => model(arguments),
+        Some("load") => load(arguments),
         Some("help" | "--help") => {
             println!("{USAGE}");
             Ok(())
@@ -117,17 +144,14 @@ fn model(arguments: impl Iterator<Item = OsString>) -> Result<(), String> {
     let items = ajimee::load(options.path("items"), options.parsed::<usize>("limit")?)?;
     let topology = Topology::detect();
     let processors = processors(&options, &topology)?;
-    let precision = scheme_of(&options)?.map_or(Precision::Single, Precision::Integers);
-    let directory = Zenz::directory_of(&model);
-    let zenz = Zenz::load(&directory, precision).map_err(|error| format!("{}: {error}", directory.display()))?;
+    let source = Source::open(&model)?;
+    let zenz = source.zenz(scheme_of(&options)?)?;
     let name = topology::processor_name().unwrap_or_else(|| std::env::consts::ARCH.to_owned());
     println!(
         "bench model: AJIMEE-Bench JWTD_v2/v1, {} items converted greedily by {}, {}; {name}",
         items.len(),
-        directory
-            .file_name()
-            .map_or_else(String::new, |name| name.to_string_lossy().into_owned()),
-        precision_name(precision)
+        source.name(),
+        precision_name(zenz.model.precision())
     );
     for processor in processors {
         let (times, clock) = run_on(processor, || convert_all(&zenz, &items))?;
@@ -148,7 +172,7 @@ fn model(arguments: impl Iterator<Item = OsString>) -> Result<(), String> {
 
 /// Converts every item, the first once more before, and times each prompt and
 /// each step of decoding.
-fn convert_all(zenz: &Zenz, items: &[Item]) -> Result<Times, String> {
+fn convert_all(zenz: &Zenz<'_>, items: &[Item]) -> Result<Times, String> {
     let mut tokens = Vec::new();
     let capacity = items
         .iter()
@@ -177,7 +201,7 @@ fn convert_all(zenz: &Zenz, items: &[Item]) -> Result<Times, String> {
 /// Converts an item greedily, as `eval` does, and times its prompt and each
 /// step of decoding.
 fn convert(
-    zenz: &Zenz,
+    zenz: &Zenz<'_>,
     session: &mut Session<'_>,
     logits: &mut [f32],
     item: &Item,
@@ -210,6 +234,82 @@ fn convert(
         times.steps.push(started.elapsed());
     }
     Ok(())
+}
+
+/// The times of loads.
+#[derive(Debug, Default)]
+struct LoadTimes {
+    loads: Vec<Duration>,
+    first: Vec<Duration>,
+    second: Vec<Duration>,
+    prompt_tokens: usize,
+}
+
+fn load(arguments: impl Iterator<Item = OsString>) -> Result<(), String> {
+    let options = arguments::parse(
+        arguments,
+        &["model", "items", "loads", "weight-bits", "rotate"],
+        &["cpu"],
+        &["int8", "fitted", "help"],
+    )
+    .map_err(|message| format!("{message}\n\n{USAGE}"))?;
+    if options.flag("help") {
+        println!("{USAGE}");
+        return Ok(());
+    }
+    let model = options.path("model").ok_or_else(|| format!("no --model\n\n{USAGE}"))?;
+    let items = ajimee::load(options.path("items"), Some(1))?;
+    let item = items.first().ok_or("no items")?;
+    let loads = options.parsed::<usize>("loads")?.unwrap_or(10).max(1);
+    let scheme = scheme_of(&options)?;
+    let topology = Topology::detect();
+    let processors = processors(&options, &topology)?;
+    let name = topology::processor_name().unwrap_or_else(|| std::env::consts::ARCH.to_owned());
+    let what = match Source::open(&model)? {
+        Source::File(path, _) => format!("the model file {}, mapped", path.display()),
+        Source::Directory(path) if scheme.is_some() => format!("{}, read and quantized", path.display()),
+        Source::Directory(path) => format!("{}, read", path.display()),
+    };
+    println!("bench load: {what}, {loads} times; {name}");
+    for processor in processors {
+        let (times, clock) = run_on(processor, || load_all(&model, scheme, item, loads))?;
+        println!("  {}", place(&topology, processor, &clock));
+        print_times("loads", &times.loads);
+        print_times(
+            &format!("first prompts after a load ({} tokens)", times.prompt_tokens),
+            &times.first,
+        );
+        print_times("second prompts", &times.second);
+    }
+    Ok(())
+}
+
+/// Loads the model anew `loads` times, and times each load and the item's
+/// prompt fed after it, twice.
+fn load_all(model: &Path, scheme: Option<Scheme>, item: &Item, loads: usize) -> Result<LoadTimes, String> {
+    let mut times = LoadTimes::default();
+    let mut tokens = Vec::new();
+    for _ in 0..loads {
+        let started = Instant::now();
+        let source = Source::open(model)?;
+        let zenz = source.zenz(scheme)?;
+        times.loads.push(started.elapsed());
+        tokens.clear();
+        zenz.tokenizer
+            .encode(&prompt(&item.reading, &item.context), &mut tokens);
+        times.prompt_tokens = tokens.len();
+        let mut session = Session::new(&zenz.model, tokens.len());
+        let mut logits = vec![0.0f32; zenz.model.config().vocabulary];
+        for pass in [&mut times.first, &mut times.second] {
+            session.truncate(0);
+            let begun = Instant::now();
+            session
+                .feed(&tokens, &mut logits)
+                .map_err(|error| format!("item {}: {error}", item.index))?;
+            pass.push(begun.elapsed());
+        }
+    }
+    Ok(times)
 }
 
 /// zenz's layers: inputs and outputs.

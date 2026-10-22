@@ -15,16 +15,28 @@
 //! most likely token after another and stops at the end of text, or at any of
 //! the characters U+EE00 to U+EE0F that the prompts are made of: zenz-v3.2 does
 //! not end its conversions, and goes on to a prompt of its own instead.
+//!
+//! zenz is read from a directory as Hugging Face publishes it ([`Zenz::load`]),
+//! or from a model file of the architecture `gpt2-zenz` and the tokenizer
+//! `byte-bpe` ([`Zenz::from_file`]), which [`Zenz::to_file`] writes from zenz in
+//! integers (docs/MODEL-FORMAT.md).
 
 use std::path::{Path, PathBuf};
 
 use kiral_kernels::vector::argmax;
+use kiral_model::file::{self, Contents, Metadata, ModelFile};
 use kiral_model::json;
 use kiral_model::safetensors::SafeTensors;
 
 use crate::Error;
-use crate::gpt2::{Config, Gpt2, Precision, Session};
+use crate::gpt2::{Config, FileTensor, Gpt2, Precision, Session};
 use crate::tokenizer::Tokenizer;
+
+/// The architecture of zenz's model files.
+pub const ARCHITECTURE: &str = "gpt2-zenz";
+
+/// The tokenizer of zenz's model files.
+pub const TOKENIZER: &str = "byte-bpe";
 
 /// The tag before the reading.
 pub const INPUT: char = '\u{ee00}';
@@ -65,9 +77,9 @@ pub fn prompt(reading: &str, left_context: &str) -> String {
 
 /// zenz: its network and its tokenizer.
 #[derive(Debug, Clone)]
-pub struct Zenz {
+pub struct Zenz<'a> {
     /// The network.
-    pub model: Gpt2,
+    pub model: Gpt2<'a>,
     /// The tokenizer.
     pub tokenizer: Tokenizer,
 }
@@ -77,7 +89,7 @@ fn read(directory: &Path, name: &str) -> Result<Vec<u8>, Error> {
     std::fs::read(&path).map_err(|error| Error::Io(path, error))
 }
 
-impl Zenz {
+impl Zenz<'static> {
     /// The model of a directory as Hugging Face publishes zenz: `config.json`,
     /// `model.safetensors`, `vocab.json`, `merges.txt` and
     /// `special_tokens_map.json`; its products computed in `precision`.
@@ -111,6 +123,69 @@ impl Zenz {
             )));
         }
         Ok(Self { model, tokenizer })
+    }
+}
+
+impl<'a> Zenz<'a> {
+    /// The model of a model file of zenz's architecture and tokenizer: its
+    /// weights read where they lie, its products in integers.
+    ///
+    /// # Errors
+    ///
+    /// Where the file is of another architecture or tokenizer, or its model or
+    /// its tokenizer are not what they should be.
+    pub fn from_file(file: &ModelFile<'a>) -> Result<Self, Error> {
+        if file.architecture() != ARCHITECTURE || file.tokenizer() != TOKENIZER {
+            return Err(Error::Architecture(format!(
+                "of the architecture {} and the tokenizer {}, not {ARCHITECTURE} and {TOKENIZER}",
+                file.architecture(),
+                file.tokenizer()
+            )));
+        }
+        let model = Gpt2::from_file(file)?;
+        let tokenizer = Tokenizer::from_vocabulary(&file.vocabulary())?;
+        if tokenizer.len() != model.config().vocabulary {
+            return Err(Error::Tokenizer(format!(
+                "a vocabulary of {} words for a model of {}",
+                tokenizer.len(),
+                model.config().vocabulary
+            )));
+        }
+        Ok(Self { model, tokenizer })
+    }
+}
+
+impl Zenz<'_> {
+    /// The model file of zenz in integers: its configuration, its tokenizer,
+    /// its tensors as [`Gpt2::to_tensors`] gives them, and the metadata given.
+    ///
+    /// # Errors
+    ///
+    /// Where the model is in single precision, or there is more of something
+    /// than the format counts.
+    pub fn to_file(&self, metadata: &Metadata<'_>) -> Result<Vec<u8>, Error> {
+        let tensors = self.model.to_tensors()?;
+        let tensors: Vec<file::Tensor<'_>> = tensors.iter().map(FileTensor::tensor).collect();
+        let words: Vec<&[u8]> = self.tokenizer.words().collect();
+        let merges = self.tokenizer.merges();
+        let configuration = self.model.config().to_bytes()?;
+        let specials = self.tokenizer.specials();
+        file::write(&Contents {
+            architecture: ARCHITECTURE,
+            tokenizer: TOKENIZER,
+            metadata: *metadata,
+            configuration: &configuration,
+            words: &words,
+            merges: &merges,
+            specials: file::Specials {
+                unknown: specials.unknown,
+                end: specials.end,
+                begin: specials.begin,
+                padding: specials.padding,
+            },
+            tensors: &tensors,
+        })
+        .map_err(Error::Write)
     }
 
     /// The directory a path names: the path, or the directory of a file in it.
@@ -163,7 +238,7 @@ pub fn tag_in(bytes: &[u8]) -> Option<usize> {
 /// zenz converting one reading after another, its session kept between them.
 #[derive(Debug)]
 pub struct Converter<'m> {
-    zenz: &'m Zenz,
+    zenz: &'m Zenz<'m>,
     session: Session<'m>,
     logits: Vec<f32>,
     tokens: Vec<u32>,
@@ -177,7 +252,7 @@ impl<'m> Converter<'m> {
     ///
     /// Where `capacity` is more than the positions of the model.
     #[must_use]
-    pub fn new(zenz: &'m Zenz, capacity: usize) -> Self {
+    pub fn new(zenz: &'m Zenz<'m>, capacity: usize) -> Self {
         Self {
             zenz,
             session: Session::new(&zenz.model, capacity),

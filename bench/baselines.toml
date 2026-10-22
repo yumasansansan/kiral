@@ -26,7 +26,9 @@
 # AJIMEE-Bench's items have, in a quantized model, the likeliest next token that
 # single precision has there (`kiral-tools agree`), and `model` the time zenz
 # takes for a prompt fed at once and for each step of decoding, in
-# milliseconds, as `replay` gives them (`kiral-tools bench model`).
+# milliseconds, as `replay` gives them (`kiral-tools bench model`). `load` keeps
+# the time to load zenz, ten loads anew, each followed by the first item's
+# prompt fed twice, in milliseconds (`kiral-tools bench load`).
 #
 # The rows of `kiral-tools eval` are measured by the same harness as KIRAL's
 # own conversions will be. The rows of `earlier` were measured in October 2026,
@@ -45,6 +47,14 @@ without_context = { accuracy = 91.0, cer = 0.69 }
 [[ajimee]]
 system = "zenz-v3.1-small alone in integers (--int8): weights of 8 bits, a scale for each output's group of 64 inputs, inputs of 8 bits with a zero point for each token's group"
 source = "kiral-tools eval --int8, 2026-10-23"
+accuracy = 87.0
+cer = 1.58
+with_context = { accuracy = 83.0, cer = 2.47 }
+without_context = { accuracy = 91.0, cer = 0.69 }
+
+[[ajimee]]
+system = "zenz-v3.1-small alone in integers, from its model file (kiral-tools model convert, the scheme of --int8), the AVX-VNNI form: no conversion changed from --int8's"
+source = "kiral-tools eval --model data/models/zenz-v3.1-small-int8.kmdl, 2026-10-23"
 accuracy = 87.0
 cer = 1.58
 with_context = { accuracy = 83.0, cer = 2.47 }
@@ -225,10 +235,16 @@ source = "earlier"
 conversions = { p50 = 2.1 }
 
 [[agree]]
-system = "zenz-v3.1-small, weights of 8 bits (--int8)"
+system = "zenz-v3.1-small, weights of 8 bits (--int8), the portable form, from the directory or from the model file"
 source = "kiral-tools agree, 2026-10-23"
 conversion_positions = { agree = 4395, of = 4396 }
 every_position = { agree = 12606, of = 12747 }
+
+[[agree]]
+system = "zenz-v3.1-small, weights of 8 bits (--int8), the AVX-VNNI form, from the directory or from the model file (--quantized)"
+source = "kiral-tools agree, 2026-10-23"
+conversion_positions = { agree = 4395, of = 4396 }
+every_position = { agree = 12625, of = 12747 }
 
 [[agree]]
 system = "zenz-v3.1-small, weights of 8 bits, rotated in blocks of 256 (--int8 --rotate 256)"
@@ -313,6 +329,74 @@ machine = "Intel Core i7-1360P, Ubuntu 26.10"
 core = "E, CPU 8, pinned, 3.70 GHz at the median"
 prompts = { count = 50, tokens_p50 = 37, p50 = [88.476, 88.598], p99 = [266.285, 264.513] }
 steps = { count = 1051, p50 = [11.344, 10.717], p99 = [12.816, 12.234] }
+
+[[model]]
+system = "zenz-v3.1-small alone in integers, from its model file, mapped, the AVX-VNNI form"
+source = "kiral-tools bench model --limit 50, 2026-10-23, two runs"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "P, CPU 0, pinned, 4.86 and 4.30 GHz at the median"
+prompts = { count = 50, tokens_p50 = 37, p50 = [28.721, 30.247], p99 = [81.179, 89.873] }
+steps = { count = 1051, p50 = [5.253, 5.38], p99 = [7.99, 7.836] }
+
+[[model]]
+system = "zenz-v3.1-small alone in integers (--int8), the AVX-VNNI form, in the same session as the model file's"
+source = "kiral-tools bench model --limit 50, 2026-10-23, two runs"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "P, CPU 0, pinned, 4.80 and 4.12 GHz at the median"
+prompts = { count = 50, tokens_p50 = 37, p50 = [30.899, 31.789], p99 = [91.031, 110.54] }
+steps = { count = 1051, p50 = [5.635, 5.947], p99 = [7.651, 8.204] }
+
+[[model]]
+system = "zenz-v3.1-small alone in integers, from its model file, mapped, the AVX-VNNI form"
+source = "kiral-tools bench model --limit 50, 2026-10-23, two runs"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "E, CPU 8, pinned, 3.70 GHz at the median"
+prompts = { count = 50, tokens_p50 = 37, p50 = [92.094, 92.808], p99 = [267.375, 297.259] }
+steps = { count = 1051, p50 = [9.982, 11.108], p99 = [13.426, 13.593] }
+
+[[model]]
+system = "zenz-v3.1-small alone in integers (--int8), the AVX-VNNI form, in the same session as the model file's"
+source = "kiral-tools bench model --limit 50, 2026-10-23, two runs"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "E, CPU 8, pinned, 3.70 GHz at the median"
+prompts = { count = 50, tokens_p50 = 37, p50 = [88.749, 89.899], p99 = [264.192, 268.466] }
+steps = { count = 1051, p50 = [10.155, 11.913], p99 = [14.061, 15.118] }
+
+[[load]]
+system = "zenz-v3.1-small in integers, its model file mapped (111.9 MB), the AVX-VNNI form"
+source = "kiral-tools bench load, 2026-10-23, two runs"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "P, CPU 0, pinned, 4.57 and 4.59 GHz at the median"
+loads = { count = 10, p50 = [0.462, 0.487], p99 = [0.68, 0.766] }
+first_prompts = { count = 10, tokens = 71, p50 = [55.649, 55.878] }
+second_prompts = { count = 10, tokens = 71, p50 = [54.885, 55.706] }
+
+[[load]]
+system = "zenz-v3.1-small in integers (--int8), its safetensors read and quantized (180.9 MB), the AVX-VNNI form"
+source = "kiral-tools bench load, 2026-10-23, two runs"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "P, CPU 0, pinned, 4.94 and 4.40 GHz at the median"
+loads = { count = 10, p50 = [467.151, 534.597], p99 = [518.207, 586.162] }
+first_prompts = { count = 10, tokens = 71, p50 = [55.594, 58.974] }
+second_prompts = { count = 10, tokens = 71, p50 = [55.496, 58.556] }
+
+[[load]]
+system = "zenz-v3.1-small in integers, its model file mapped (111.9 MB), the AVX-VNNI form"
+source = "kiral-tools bench load, 2026-10-23, two runs"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "E, CPU 8, pinned, 3.70 GHz at the median"
+loads = { count = 10, p50 = [1.232, 1.251], p99 = [1.356, 1.279] }
+first_prompts = { count = 10, tokens = 71, p50 = [178.88, 180.026] }
+second_prompts = { count = 10, tokens = 71, p50 = [178.084, 178.874] }
+
+[[load]]
+system = "zenz-v3.1-small in integers (--int8), its safetensors read and quantized (180.9 MB), the AVX-VNNI form"
+source = "kiral-tools bench load, 2026-10-23, two runs"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "E, CPU 8, pinned, 3.70 GHz at the median"
+loads = { count = 10, p50 = [636.818, 645.711], p99 = [689.285, 692.055] }
+first_prompts = { count = 10, tokens = 71, p50 = [179.335, 180.93] }
+second_prompts = { count = 10, tokens = 71, p50 = [178.848, 179.432] }
 
 [[kernels]]
 system = "the products in integers of zenz's layers, weights of 8 bits"

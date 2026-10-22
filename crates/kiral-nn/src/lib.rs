@@ -8,15 +8,16 @@
 
 //! KIRAL's networks.
 //!
-//! - [`gpt2`]: GPT-2 in single precision, zenz's network.
+//! - [`gpt2`]: GPT-2 in single precision and in integers, zenz's network.
 //! - [`tokenizer`]: GPT-2's byte-level BPE, zenz's tokenizer.
-//! - [`zenz`]: zenz used alone, with zenz-v3's prompt and greedy decoding.
+//! - [`zenz`]: zenz used alone, with zenz-v3's prompt and greedy decoding; and
+//!   its model files.
 #![forbid(unsafe_code)]
 
 use std::fmt;
 use std::path::PathBuf;
 
-use kiral_model::{json, safetensors};
+use kiral_model::{file, json, safetensors};
 
 pub mod gpt2;
 pub mod tokenizer;
@@ -40,6 +41,10 @@ pub enum Error {
     /// Tokens a model cannot compute: none, out of its vocabulary, or past its
     /// room.
     Input(String),
+    /// A model file not of the architecture and tokenizer read.
+    Architecture(String),
+    /// A model file that could not be written.
+    Write(file::BuildError),
 }
 
 impl fmt::Display for Error {
@@ -52,6 +57,8 @@ impl fmt::Display for Error {
             Self::Tensor(message) => write!(formatter, "the weights: {message}"),
             Self::Tokenizer(message) => write!(formatter, "the tokenizer: {message}"),
             Self::Input(message) => write!(formatter, "the input: {message}"),
+            Self::Architecture(message) => write!(formatter, "the model file: {message}"),
+            Self::Write(error) => write!(formatter, "the model file: {error}"),
         }
     }
 }
@@ -62,7 +69,8 @@ impl std::error::Error for Error {
             Self::Io(_, error) => Some(error),
             Self::Json(_, error) => Some(error),
             Self::SafeTensors(error) => Some(error),
-            Self::Config(_) | Self::Tensor(_) | Self::Tokenizer(_) | Self::Input(_) => None,
+            Self::Write(error) => Some(error),
+            Self::Config(_) | Self::Tensor(_) | Self::Tokenizer(_) | Self::Input(_) | Self::Architecture(_) => None,
         }
     }
 }

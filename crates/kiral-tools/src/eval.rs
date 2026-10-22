@@ -37,23 +37,26 @@ use kiral_nn::zenz::{Converter, Stop, Zenz, prompt};
 
 use crate::ajimee::{self, Item};
 use crate::metrics::{count, least_error_rate, mcnemar};
+use crate::model::Source;
 use crate::mozc::{Mozc, Programs};
 use crate::{arguments, results, romaji};
 
 const USAGE: &str = "\
-usage: kiral-tools eval (--model <directory> | --dict <file> | --mozc) [options]
+usage: kiral-tools eval (--model <path> | --dict <file> | --mozc) [options]
 
 The accuracy of a conversion against AJIMEE-Bench (JWTD_v2/v1): zenz alone
 (zenz-v3's prompt, greedy decoding, no dictionary), a dictionary alone (each
 reading's best path by Viterbi, no left context), or Mozc (the reading typed in
 romaji, converted with Space, no left context).
 
-  --model <directory>   zenz as Hugging Face publishes it: config.json,
-                        model.safetensors, vocab.json, merges.txt and
-                        special_tokens_map.json (a file in it names it too)
+  --model <path>        zenz as Hugging Face publishes it, a directory of
+                        config.json, model.safetensors, vocab.json, merges.txt
+                        and special_tokens_map.json (a file in it names it
+                        too); or a model file, which kiral-tools model convert
+                        makes, in integers by its own scheme
   --int8                zenz's products in integers: its weights quantized to
-                        bytes when it is read, a scale for each output's group
-                        of 64 inputs [single precision]
+                        bytes when the directory is read, a scale for each
+                        output's group of 64 inputs [single precision]
   --weight-bits <n>     the bits of a weight's integer, 2 to 8 [8]
   --rotate <order>      each block of this many inputs, a power of four,
                         rotated first by a regular Hadamard matrix [none]
@@ -70,9 +73,9 @@ romaji, converted with Space, no left context).
   --limit <n>           the first n items only
   --threads <n>         the threads zenz's items are shared among [all]
   --label <name>        the name the results are kept and compared under
-                        [the model's directory's name, with -int8 and the
-                        scheme's other choices for --int8, dict-<name>, or
-                        mozc-<version>]
+                        [the model's name, its directory's or the one its file
+                        gives, with -int8 and the scheme's other choices in
+                        integers, dict-<name>, or mozc-<version>]
   --against <file>      the results to compare with [the label's last]
   --results <directory> where results are kept [bench/results/ajimee]";
 
@@ -157,25 +160,24 @@ fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<(), String> {
 
 /// zenz's conversions, and the label of their results.
 fn with_zenz(options: &arguments::Options, model: &Path, items: &[Item]) -> Result<(String, Vec<Converted>), String> {
-    let directory = Zenz::directory_of(model);
+    let source = Source::open(model)?;
     let threads = match options.parsed::<usize>("threads")? {
         Some(threads) => threads.max(1),
         None => std::thread::available_parallelism().map_or(1, usize::from),
     }
     .min(items.len());
-    let precision = scheme_of(options)?.map_or(Precision::Single, Precision::Integers);
-    let label = options.text("label").unwrap_or_else(|| {
-        let name = directory
-            .file_name()
-            .map_or_else(|| "zenz".to_owned(), |name| name.to_string_lossy().into_owned());
-        match precision {
-            Precision::Single => name,
-            Precision::Integers(scheme) => format!("{name}-{}", scheme_label(&scheme)),
-        }
+    let zenz = source.zenz(scheme_of(options)?)?;
+    let precision = zenz.model.precision();
+    let label = options.text("label").unwrap_or_else(|| match precision {
+        Precision::Single => source.name(),
+        Precision::Integers(scheme) => format!("{}-{}", source.name(), scheme_label(&scheme)),
     });
-    let zenz = Zenz::load(&directory, precision).map_err(|error| format!("{}: {error}", directory.display()))?;
+    let from = match &source {
+        Source::File(path, _) => format!(", from the model file {}", path.display()),
+        Source::Directory(_) => String::new(),
+    };
     println!(
-        "AJIMEE-Bench JWTD_v2/v1, {} items: {label}, zenz alone (zenz-v3's prompt, greedy, {})",
+        "AJIMEE-Bench JWTD_v2/v1, {} items: {label}, zenz alone (zenz-v3's prompt, greedy, {}){from}",
         items.len(),
         precision_name(precision)
     );
@@ -401,7 +403,7 @@ pub fn limit(item: &Item) -> usize {
 
 /// zenz's conversions of the items, in their order, the items shared out among
 /// the threads.
-fn convert_with_zenz(zenz: &Zenz, items: &[Item], threads: usize) -> Result<Vec<Converted>, String> {
+fn convert_with_zenz(zenz: &Zenz<'_>, items: &[Item], threads: usize) -> Result<Vec<Converted>, String> {
     // Room for the longest prompt and its conversion.
     let mut tokens = Vec::new();
     let capacity = items

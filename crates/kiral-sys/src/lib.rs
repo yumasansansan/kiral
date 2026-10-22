@@ -10,8 +10,10 @@
 //! brings them.
 //!
 //! - [`affinity`]: the processors a thread may run on.
+//! - [`map`]: files mapped into memory, read-only.
 //!
 //! Each call into a system is one unsafe block, whose `SAFETY` comment says
 //! what makes it sound; the functions here are safe to call.
 
 pub mod affinity;
+pub mod map;

@@ -14,6 +14,7 @@
 
 use std::path::Path;
 
+use kiral_model::file::{self, Contents, Kind, Metadata, ModelFile, Panels, Specials, Tensor};
 use kiral_model::json;
 use kiral_model::safetensors::SafeTensors;
 
@@ -87,6 +88,60 @@ fn safetensors_seed() -> Vec<u8> {
     [&length.to_le_bytes()[..], header, &[0x3f; 24]].concat()
 }
 
+/// A small model file: floats of both kinds and weights in panels, a
+/// vocabulary of special words, bytes and merges.
+fn model_file_seed() -> Vec<u8> {
+    let panels = Panels {
+        columns: 16,
+        group: 64,
+        bits: 8,
+        fitted: false,
+        rotation: 4,
+    };
+    let weights = vec![0x11; panels.length(5, 3).expect("a length")];
+    let tensors = [
+        Tensor {
+            name: "e",
+            kind: Kind::Bf16,
+            shape: vec![2, 3],
+            bytes: &[0x80, 0x3f, 0, 0x40, 0x40, 0x40, 0x80, 0x3f, 0, 0, 0, 0x80],
+        },
+        Tensor {
+            name: "n",
+            kind: Kind::F32,
+            shape: vec![2],
+            bytes: &[0, 0, 0x80, 0x3f, 0, 0, 0, 0xc0],
+        },
+        Tensor {
+            name: "w",
+            kind: Kind::Panels(panels),
+            shape: vec![5, 3],
+            bytes: &weights,
+        },
+    ];
+    let contents = Contents {
+        architecture: "gpt2-zenz",
+        tokenizer: "byte-bpe",
+        metadata: Metadata {
+            name: "seed",
+            license: "CC0-1.0",
+            source: "here",
+            notice: "none",
+        },
+        configuration: &[1, 0, 0, 0, 2, 0, 0, 0],
+        words: &[b"", b"", b"a", b"b", b"ab"],
+        merges: &[[2, 3, 4]],
+        specials: Specials {
+            unknown: 0,
+            end: 1,
+            begin: Some(1),
+            padding: None,
+        },
+        tensors: &tensors,
+    };
+    file::write(&contents).expect("a model file")
+}
+
 #[test]
 fn json_takes_any_bytes() {
     let seeds: [&[u8]; 5] = [
@@ -123,5 +178,32 @@ fn safetensors_takes_any_bytes() {
     }
     for input in regressions("safetensors") {
         let _ = SafeTensors::parse(&input);
+    }
+}
+
+#[test]
+fn model_files_take_any_bytes() {
+    let seed = model_file_seed();
+    assert!(
+        ModelFile::parse(&seed).is_ok_and(|model| model.verify()),
+        "a seed that is not a file"
+    );
+    let mut random = Random(13);
+    for _ in 0..20_000 {
+        let input = mutate(&mut random, &seed);
+        if let Ok(model) = ModelFile::parse(&input) {
+            for tensor in model.tensors() {
+                let _ = tensor.floats().map(|floats| floats.to_vec());
+            }
+            let vocabulary = model.vocabulary();
+            for word in 0..=vocabulary.len() {
+                let _ = vocabulary.word(word);
+            }
+            let _ = vocabulary.merges().count();
+            let _ = model.verify();
+        }
+    }
+    for input in regressions("model-file") {
+        let _ = ModelFile::parse(&input);
     }
 }

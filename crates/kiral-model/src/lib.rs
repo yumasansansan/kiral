@@ -8,14 +8,18 @@
 
 //! The files models come in, read by hand.
 //!
+//! - [`file`]: KIRAL's model file, read where it lies, and written.
 //! - [`safetensors`]: the form zenz's weights are published in.
 //! - [`json`]: the headers of safetensors files, and the tokenizers' files.
 //! - [`half`]: bfloat16 and half precision, to single precision.
+//! - [`sha256`]: the digest a model file carries of itself.
 //!
 //! Every parser here takes any bytes, and returns an error for those it cannot
 //! read, never a panic.
 #![forbid(unsafe_code)]
 
+pub mod file;
 pub mod half;
 pub mod json;
 pub mod safetensors;
+pub mod sha256;

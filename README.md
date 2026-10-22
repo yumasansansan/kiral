@@ -35,7 +35,7 @@ So far, the harness that every later step is measured on:
 
   Every one of the 200 conversions is the same as that of the network written in double precision with NumPy, apart from KIRAL's code.
 
-  In integers (`--int8`): the weights of the linear layers and of the output layer quantized to bytes as the model is read, a scale for each output's group of 64 inputs, and their inputs quantized as they come, a scale and a zero point for each token's group (`kiral_kernels::quantized`, in the layout of stable-diffusion.assembly's `bits=8`), the products of a group summed exactly in 32 bits: Acc@1 87.0 and CER 1.58, the same items right as in single precision, one conversion of the 200 changed and wrong either way. `kiral-tools agree` feeds each item's prompt and single precision's conversion of it to both and compares the likeliest next token at each position of the conversion, what checking a draft depends on: 4395 of the 4396 positions agree.
+  In integers (`--int8`): the weights of the linear layers and of the output layer quantized to bytes as the model is read, or once, into a model file (below), a scale for each output's group of 64 inputs, and their inputs quantized as they come, a scale and a zero point for each token's group (`kiral_kernels::quantized`, in the layout of stable-diffusion.assembly's `bits=8`), the products of a group summed exactly in 32 bits: Acc@1 87.0 and CER 1.58, the same items right as in single precision, one conversion of the 200 changed and wrong either way. `kiral-tools agree` feeds each item's prompt and single precision's conversion of it to both and compares the likeliest next token at each position of the conversion, what checking a draft depends on: 4395 of the 4396 positions agree.
 
   Fewer bits take more care. A scheme may rotate each block of a layer's inputs, as ConvRot does for the diffusion transformers, by a regular Hadamard matrix -- each of its rows and columns sums to the square root of its order, so that a row's large numbers spread rather than add up -- the weights when they are packed and the inputs online; fit each group's scale to its least squared error; and the output layer keeps eight bits. The positions of the conversions that agree with single precision, of 4396:
 
@@ -64,6 +64,17 @@ So far, the harness that every later step is measured on:
 
   With AVX-VNNI's `vpdpbusd`, the form the processor runs here, a prompt takes about a sixth of single precision's time on the P-core and a third on the E-core, and a step of decoding about a third and a half: a step reads every weight, 340 MB in single precision and a quarter of that in bytes. The portable form, for processors without VNNI, takes twice as long as single precision over a prompt and about as long over a step.
 
+- KIRAL's model file ([docs/MODEL-FORMAT.md](docs/MODEL-FORMAT.md)): `kiral-tools model convert` writes zenz in integers into one file -- its configuration, its tokenizer, and its weights quantized and packed in the layout the kernels read, each tensor on a line of the caches -- with the license of its weights, their notices and a SHA-256 of itself, which `kiral-tools model check` checks. It is loaded by mapping it (`kiral-sys`): the weights are read where they lie, an embedding's row converted to single precision when it is looked up, and only the normalizations' and the biases' 0.5 MB are copied. zenz-v3.1-small's is 111.9 MB, against 180.9 MB of safetensors in bfloat16, and AJIMEE-Bench converts from it exactly as from the safetensors quantized as they are read: Acc@1 87.0, no conversion changed, 4395 of the 4396 positions agreeing with single precision. Timed with `kiral-tools bench load`, ten loads, each followed by the first item's prompt fed twice, on the i7-1360P:
+
+  | Two runs each | Loads, p50 | First prompts after a load, p50 | Second prompts, p50 |
+  | --- | ---: | ---: | ---: |
+  | The model file, P-core (CPU 0, 4.6 GHz) | 0.46–0.49 ms | 55.6–55.9 ms | 54.9–55.7 ms |
+  | The safetensors read and quantized, P-core (4.4–4.9 GHz) | 467–535 ms | 55.6–59.0 ms | 55.5–58.6 ms |
+  | The model file, E-core (CPU 8, 3.70 GHz) | 1.23–1.25 ms | 178.9–180.0 ms | 178.1–178.9 ms |
+  | The safetensors read and quantized, E-core | 637–646 ms | 179.3–180.9 ms | 178.8–179.4 ms |
+
+  The prompt, of 71 tokens, reads every weight. The first after a load, which takes the mapped file's pages from the system's cache of the file as it touches them, is within 0.2 to 1.2 ms of the second, as the first after reading the safetensors is (0.1 to 1.5 ms). Converting `bench model`'s items, the mapped file is as fast as weights quantized into memory, within what the runs differ by: steps of decoding at 5.3–5.4 ms at the median on the P-core against 5.6–5.9 ms, and 10.0–11.1 ms on the E-core against 10.2–11.9 ms, the P-core's clock between 4.1 and 4.9 GHz at the median of the runs.
+
 - Mozc, measured as it is used: `kiral-tools eval --mozc` types each reading in romaji into a Mozc of the run's own -- a profile made for the run and removed after, so that the user's own Mozc learns nothing -- a key at a time through `mozc_emacs_helper`, converts it with Space and cancels it, checking that what was typed is the reading. Mozc 2.29 has Acc@1 47.5 and CER 7.91 (43.0 / 10.29 with left context, which it does not take, 52.0 / 5.54 without). `kiral-tools replay --mozc --cpu p0 --cpu e0` times each key and each conversion, the run pinned to a performance core and then to an efficiency core (`kiral-sys`, `kiral-cpu`), with the clock read beside; on an i7-1360P, the times of answers through Mozc's IPC:
 
   | Mozc 2.29 | Keys, p50 | p99 | Conversions, p50 | p99 |
@@ -89,7 +100,7 @@ So far, the harness that every later step is measured on:
 - The kernels in single precision (`kiral-kernels`): linear layers on weights packed in panels, layer normalization, GELU, softmax and attention over the cache, in plain Rust that the compiler turns into vector code. Each is tested against double precision, its error held to the bound that the analysis of its roundings gives, at lengths that are not multiples of the vectors' width.
 - The products in integers in assembly for AVX-VNNI (`crates/kiral-kernels/asm/x86_64/qgemm_avx_vnni.S`), the first form in assembly: tiles of one to six rows by sixteen columns, `vpdpbusd` adding four products of bytes to a lane, of three rows or fewer in two sets of sums so that twice the chains run side by side. Tested at every number of rows against double precision, as the portable form is, and run wherever the processor has AVX-VNNI and the environment allows it. With 16 to 40 rows, 179–205 GMAC/s on a P-core of the i7-1360P against the portable form's 8–10, and 46–48 on an E-core against 6.3–6.7 (`kiral-tools bench kernels`).
 - The levels of the instruction set (`kiral-cpu`), as std's detection finds them, and the choice among them that `KIRAL_ISA=<level>` and `KIRAL_KERNELS=portable` hold back.
-- safetensors and JSON read by hand (`kiral-model`), taking any bytes: what is not a file of theirs is an error, never a panic.
+- KIRAL's model file, safetensors and JSON read by hand, and SHA-256 written out (`kiral-model`), the parsers taking any bytes: what is not a file of theirs is an error, never a panic.
 
 No crate is fetched from crates.io: the formats are parsed by hand, and Cargo.lock names the workspace's own crates only.
 
@@ -134,6 +145,18 @@ cargo run --release --locked -p kiral-tools -- bench model --model data/zenz-v3.
 ```
 
 ```bash
+cargo run --release --locked -p kiral-tools -- model convert --model data/zenz-v3.1-small --output data/models/zenz-v3.1-small-int8.kmdl --source "zenz-v3.1-small by Keita Miwa, fine-tuned from ku-nlp's gpt2-small-japanese-char: https://huggingface.co/Miwa-Keita/zenz-v3.1-small, revision 344612e331bf3ba752a9bfef6633c93c6b933ebb"
+```
+
+```bash
+cargo run --release --locked -p kiral-tools -- eval --model data/models/zenz-v3.1-small-int8.kmdl
+```
+
+```bash
+cargo run --release --locked -p kiral-tools -- bench load --model data/models/zenz-v3.1-small-int8.kmdl --cpu p0 --cpu e0
+```
+
+```bash
 python3 scripts/fetch_datasets.py fetch mozc-dictionary sudachi-dictionary
 ```
 
@@ -157,10 +180,10 @@ cargo run --release --locked -p kiral-tools -- eval --mozc
 cargo run --release --locked -p kiral-tools -- replay --mozc --cpu p0 --cpu e0
 ```
 
-The script fetches AJIMEE-Bench, zenz-v3.1-small, Mozc's dictionary and SudachiDict from fixed revisions into `data/`, which is not committed, and checks them against the SHA-256 that `scripts/datasets.sha256` records; `list` shows where each comes from and its terms. `dict build` without `--sudachi` builds Mozc's dictionary alone, and `--lists small_lex.csv,core_lex.csv,notcore_lex.csv` all of SudachiDict's lists. The results of each run go to `bench/results/`, and `bench/baselines.toml` keeps the numbers that runs are compared with. Mozc is measured on Linux, with the package `emacs-mozc-bin` for its helper.
+The script fetches AJIMEE-Bench, zenz-v3.1-small, Mozc's dictionary and SudachiDict from fixed revisions into `data/`, which is not committed, and checks them against the SHA-256 that `scripts/datasets.sha256` records; `list` shows where each comes from and its terms. `model convert` writes zenz in integers to `data/models/`; `--source` names where its weights come from, for the file's notices, and `--model` takes the file wherever it takes zenz's directory (`agree` takes it as `--quantized`). `dict build` without `--sudachi` builds Mozc's dictionary alone, and `--lists small_lex.csv,core_lex.csv,notcore_lex.csv` all of SudachiDict's lists. The results of each run go to `bench/results/`, and `bench/baselines.toml` keeps the numbers that runs are compared with. Mozc is measured on Linux, with the package `emacs-mozc-bin` for its helper.
 
 ## License
 
 KIRAL's code is under the GNU General Public License, version 3 or any later version (`LICENSES/GPL-3.0-or-later.txt`); every file names its copyright holder and license in the form of the [REUSE](https://reuse.software/) specification, which `reuse lint` checks.
 
-Models and data are not part of the repository: they are separate files under their sources' licenses, fetched by whoever measures. zenz-v3.1-small is under CC BY-SA 4.0 (Keita Miwa, fine-tuned from ku-nlp's gpt2-small-japanese-char, CC BY-SA 4.0), and AJIMEE-Bench's data under CC BY-SA 3.0, from Kyoto University's Japanese Wikipedia Typo Dataset v2. Mozc's open-source dictionary is under IPAdic's terms, with Google's additions under Mozc's BSD-3-Clause license and the Okinawa dictionary's words in the public domain. SudachiDict is under the Apache License 2.0 (Works Applications), with what it holds of UniDic under UniDic's BSD-3-Clause license and its words from NEologd credited to their sources. A dictionary file built from them goes under the same terms, whose notices it holds.
+Models and data are not part of the repository: they are separate files under their sources' licenses, fetched by whoever measures. zenz-v3.1-small is under CC BY-SA 4.0 (Keita Miwa, fine-tuned from ku-nlp's gpt2-small-japanese-char, CC BY-SA 4.0), and AJIMEE-Bench's data under CC BY-SA 3.0, from Kyoto University's Japanese Wikipedia Typo Dataset v2. Mozc's open-source dictionary is under IPAdic's terms, with Google's additions under Mozc's BSD-3-Clause license and the Okinawa dictionary's words in the public domain. SudachiDict is under the Apache License 2.0 (Works Applications), with what it holds of UniDic under UniDic's BSD-3-Clause license and its words from NEologd credited to their sources. A dictionary file built from them goes under the same terms, whose notices it holds; a model file made from zenz-v3.1-small goes under CC BY-SA 4.0 too, with the notices it holds: where its weights come from, and what was changed.
