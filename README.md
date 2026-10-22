@@ -97,6 +97,27 @@ So far, the harness that every later step is measured on:
   | P-core (CPU 0, 4.87 GHz at the median) | 0.032 ms | 0.235 ms | 0.040 ms | 0.242 ms |
   | E-core (CPU 8, 3.69 GHz at the median) | 0.055 ms | 0.330 ms | 0.071 ms | 0.358 ms |
 
+- KIRAL's engine (`kiral-engine`): the dictionary's conversion is a draft that zenz verifies, as Zenzai does. The model is fed the prompt and the draft's tokens at once -- the keys and values of what the sequence shares with the one fed before kept -- and the draft stands where each of its tokens, and the end of text after them, is the model's likeliest. At the first that is not, what the model accepted and the token it wants instead become a constraint on the text, and the lattice is searched again for the cheapest path that keeps it (`Lattice::best_within`), round after round, until the model accepts the draft or wants a text no path has. The conversion is a path of the lattice whatever happens. zenz-v3.1-small in integers, from its model file, and the dictionary of Mozc's and SudachiDict's core nouns, against AJIMEE-Bench's 200 items, each converted as an explicit conversion with no deadline:
+
+  | Rounds at most | Acc@1 | CER | Rounds an item |
+  | ---: | ---: | ---: | ---: |
+  | 1 | 72.0 | 3.52 | 1.00 |
+  | 2 | 81.5 | 2.32 | 1.49 |
+  | 3 | 83.5 | 1.96 | 1.69 |
+  | 4 | 83.5 | 1.90 | 1.75 |
+  | 8 | 84.0 | 1.91 | 1.79 |
+
+  No item takes more than 7 rounds. The model accepts the draft of 186 items, and each of them is zenz's own conversion; the 14 others end where the model wants a text the dictionary cannot write, and six of those zenz alone converts right (87.0): five multi-digit numbers (45, 1991, 50, 10, 2005 and 26), as the dictionary's digits read in kana are single, and 夜駆け, which it lacks. No item is right that zenz alone has wrong.
+
+  Typed live (`kiral-tools replay`), a kana every 100 ms: the input thread drafts each key from its lattice, within the constraint of the last refinement, and posts the reading to a worker, which refines it by a round and gives it back unless a later key has made it stale -- it asks before each block of the model -- and Space waits up to 30 ms for a refinement of up to 8 rounds. 50 items, two runs each, on the i7-1360P on battery (the energy preference `balance_power`), the worker on a core of its own of the same kind:
+
+  | Two runs each | Kana, p50 | p99 | Refinements, p50 | p99 | Came before the next key | Space refined in time | Acc@1 of Space |
+  | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+  | P-cores (typing on CPU 0, the worker on CPU 2 at 1.80 GHz at the median) | 0.45–0.47 ms | 1.27–1.50 ms | 42.9–43.4 ms | 95.5–96.6 ms | 1384–1387 of 1435 | 45 of 50 | 82.0 |
+  | E-cores (CPU 8, the worker on CPU 9 at 2.20 GHz) | 0.41–0.42 ms | 1.15–1.18 ms | 60.3–60.4 ms | 98.6–98.8 ms | 734–752 of 1435 | 24 of 50 | 64.0–66.0 |
+
+  A key's work on the input thread stays within 2 ms at the 99th percentile while the model works. A key's refinement feeds the model the reading's new kana, the tag after it and the whole draft again, as zenz's prompt puts the reading before the conversion; with the clock that a core on battery keeps between keys, it takes about three times the 15 ms that is the aim on a P-core. The same 50 items converted with no deadline are right for 42.
+
 - The kernels in single precision (`kiral-kernels`): linear layers on weights packed in panels, layer normalization, GELU, softmax and attention over the cache, in plain Rust that the compiler turns into vector code. Each is tested against double precision, its error held to the bound that the analysis of its roundings gives, at lengths that are not multiples of the vectors' width.
 - The products in integers in assembly for AVX-VNNI (`crates/kiral-kernels/asm/x86_64/qgemm_avx_vnni.S`), the first form in assembly: tiles of one to six rows by sixteen columns, `vpdpbusd` adding four products of bytes to a lane, of three rows or fewer in two sets of sums so that twice the chains run side by side. Tested at every number of rows against double precision, as the portable form is, and run wherever the processor has AVX-VNNI and the environment allows it. With 16 to 40 rows, 179–205 GMAC/s on a P-core of the i7-1360P against the portable form's 8–10, and 46–48 on an E-core against 6.3–6.7 (`kiral-tools bench kernels`).
 - The levels of the instruction set (`kiral-cpu`), as std's detection finds them, and the choice among them that `KIRAL_ISA=<level>` and `KIRAL_KERNELS=portable` hold back.
@@ -173,6 +194,14 @@ cargo run --release --locked -p kiral-tools -- replay --dict data/dictionaries/m
 ```
 
 ```bash
+cargo run --release --locked -p kiral-tools -- eval --model data/models/zenz-v3.1-small-int8.kmdl --dict data/dictionaries/mozc-sudachi.kdic
+```
+
+```bash
+cargo run --release --locked -p kiral-tools -- replay --model data/models/zenz-v3.1-small-int8.kmdl --dict data/dictionaries/mozc-sudachi.kdic --limit 50 --cpu p0:p2 --cpu e0:e1
+```
+
+```bash
 cargo run --release --locked -p kiral-tools -- eval --mozc
 ```
 
@@ -180,7 +209,7 @@ cargo run --release --locked -p kiral-tools -- eval --mozc
 cargo run --release --locked -p kiral-tools -- replay --mozc --cpu p0 --cpu e0
 ```
 
-The script fetches AJIMEE-Bench, zenz-v3.1-small, Mozc's dictionary and SudachiDict from fixed revisions into `data/`, which is not committed, and checks them against the SHA-256 that `scripts/datasets.sha256` records; `list` shows where each comes from and its terms. `model convert` writes zenz in integers to `data/models/`; `--source` names where its weights come from, for the file's notices, and `--model` takes the file wherever it takes zenz's directory (`agree` takes it as `--quantized`). `dict build` without `--sudachi` builds Mozc's dictionary alone, and `--lists small_lex.csv,core_lex.csv,notcore_lex.csv` all of SudachiDict's lists. The results of each run go to `bench/results/`, and `bench/baselines.toml` keeps the numbers that runs are compared with. Mozc is measured on Linux, with the package `emacs-mozc-bin` for its helper.
+The script fetches AJIMEE-Bench, zenz-v3.1-small, Mozc's dictionary and SudachiDict from fixed revisions into `data/`, which is not committed, and checks them against the SHA-256 that `scripts/datasets.sha256` records; `list` shows where each comes from and its terms. `eval` with both `--model` and `--dict` converts with KIRAL's engine, up to `--rounds` rounds (8), and `replay` with both types into it, the worker pinned to the processor after the colon -- on the i7-1360P, `p0` is CPU 0 and `p2` CPU 2, another core (`p1` is CPU 0's other thread). `model convert` writes zenz in integers to `data/models/`; `--source` names where its weights come from, for the file's notices, and `--model` takes the file wherever it takes zenz's directory (`agree` takes it as `--quantized`). `dict build` without `--sudachi` builds Mozc's dictionary alone, and `--lists small_lex.csv,core_lex.csv,notcore_lex.csv` all of SudachiDict's lists. The results of each run go to `bench/results/`, and `bench/baselines.toml` keeps the numbers that runs are compared with. Mozc is measured on Linux, with the package `emacs-mozc-bin` for its helper.
 
 ## License
 

@@ -29,6 +29,10 @@
 //! text is the text of some path, a digit read in kana written either way, as
 //! a conversion offers both: the oracle, the share of a benchmark's accepted
 //! conversions that the dictionary can make at all.
+//!
+//! [`Lattice::best_within`] finds the cheapest path whose text begins with
+//! given bytes, or is them ([`Constraint`]): what a model has accepted of a
+//! draft and the token it wants next, which the next draft must keep.
 #![forbid(unsafe_code)]
 
 use kiral_dict::{Dictionary, mozc, normalize};
@@ -78,6 +82,105 @@ pub struct Path {
 
 /// No node: the beginning of the sentence, before the first.
 const BEGINNING: usize = usize::MAX;
+
+/// What the text of a path must begin with, and whether it must end there:
+/// what a model has accepted of a draft and the token it wants next, or the
+/// whole of the text it wants.
+#[derive(Debug, Clone, Default, PartialEq, Eq, Hash)]
+pub struct Constraint {
+    /// The bytes the text's UTF-8 begins with: whole characters or not, as a
+    /// model's token may end within a character.
+    pub prefix: Vec<u8>,
+    /// Whether the text is these bytes and nothing more.
+    pub complete: bool,
+}
+
+impl Constraint {
+    /// Whether the constraint admits a text.
+    #[must_use]
+    pub fn admits(&self, text: &str) -> bool {
+        if self.complete {
+            text.as_bytes() == self.prefix
+        } else {
+            text.as_bytes().starts_with(&self.prefix)
+        }
+    }
+
+    /// The bytes of the prefix matched after a piece of text that follows a
+    /// text matching `before` of them, the prefix's length once it is passed;
+    /// none where the piece leaves the prefix, or goes on past a complete one.
+    fn advance(&self, before: usize, piece: &[u8]) -> Option<usize> {
+        let length = self.prefix.len();
+        if before >= length {
+            return (!self.complete || piece.is_empty()).then_some(length);
+        }
+        let overlap = piece.len().min(length - before);
+        if piece[..overlap] != self.prefix[before..before + overlap] {
+            return None;
+        }
+        let after = before + piece.len();
+        if after <= length {
+            Some(after)
+        } else if self.complete {
+            None
+        } else {
+            Some(length)
+        }
+    }
+}
+
+/// A way to a node, for [`Lattice::best_within`]: the bytes of the
+/// constraint's prefix that the text before the node matches, the cost from
+/// the beginning of the sentence to the node, the node's own included, and the
+/// way to the node before it.
+#[derive(Debug, Clone, Copy)]
+struct Way {
+    node: usize,
+    matched: usize,
+    cost: i64,
+    from: usize,
+}
+
+/// The cheapest of the ways that end at a position with a class on their right
+/// and the bytes of the prefix their text matches, their last node's text
+/// included.
+#[derive(Debug, Clone, Copy)]
+struct Ending {
+    rid: u16,
+    matched: usize,
+    cost: i64,
+    way: usize,
+}
+
+/// No way: the beginning of the sentence, before the first node.
+const NO_WAY: usize = usize::MAX;
+
+/// A node that is a suffix of nouns: the next node, for the text of a digit
+/// read in kana written before one.
+const SUFFIX: Node<'static> = Node {
+    begin: 0,
+    end: 0,
+    lid: 0,
+    rid: 0,
+    cost: 0,
+    surface: None,
+    flags: mozc::SUFFIX,
+    known: true,
+};
+
+/// Keeps the cheapest ending of each class and bytes matched.
+fn keep_cheapest(endings: &mut Vec<Ending>, ending: Ending) {
+    if let Some(kept) = endings
+        .iter_mut()
+        .find(|kept| kept.rid == ending.rid && kept.matched == ending.matched)
+    {
+        if ending.cost < kept.cost {
+            *kept = ending;
+        }
+    } else {
+        endings.push(ending);
+    }
+}
 
 impl<'a> Lattice<'a> {
     /// The lattice of a reading, in any form, over a dictionary.
@@ -242,6 +345,122 @@ impl<'a> Lattice<'a> {
         }
         nodes.reverse();
         Path { nodes, cost }
+    }
+
+    /// The cheapest path whose text the constraint admits; none where no
+    /// path's text is admitted. Viterbi over the nodes and the bytes of the
+    /// constraint's prefix matched before each: a node's text is known only
+    /// with the node after it -- a digit read in kana is written otherwise
+    /// before a suffix -- so a way to a node holds what the text before the
+    /// node matched, and the node's own text is matched on the way to the next.
+    /// The ways that end at a position are taken together by their class on
+    /// the right and the bytes they matched, as [`Lattice::best`] takes them by
+    /// their class.
+    #[must_use]
+    pub fn best_within(&self, dictionary: &Dictionary<'_>, constraint: &Constraint) -> Option<Path> {
+        let length = self.len();
+        if length == 0 {
+            return constraint.admits("").then(|| Path {
+                nodes: Vec::new(),
+                cost: i64::from(dictionary.connection(0, 0)),
+            });
+        }
+        let mut ways: Vec<Way> = Vec::new();
+        let mut ranges = vec![0..0; self.nodes.len()];
+        // The endings at a position before a node that is no suffix, and before
+        // one that is.
+        let mut endings: [Vec<Ending>; 2] = [Vec::new(), Vec::new()];
+        let mut text = String::new();
+        for position in 0..length {
+            for kept in &mut endings {
+                kept.clear();
+            }
+            if position == 0 {
+                for kept in &mut endings {
+                    kept.push(Ending {
+                        rid: 0,
+                        matched: 0,
+                        cost: 0,
+                        way: NO_WAY,
+                    });
+                }
+            }
+            for &node in self.ends.get(position).map_or(&[][..], Vec::as_slice) {
+                let digit = self.nodes[node].flags & mozc::DIGIT != 0;
+                for before_suffix in [false, true] {
+                    // A text that does not depend on the next node is matched once.
+                    if before_suffix && !digit {
+                        break;
+                    }
+                    text.clear();
+                    self.push_text(&self.nodes[node], before_suffix.then_some(&SUFFIX), &mut text);
+                    for way in ranges[node].clone() {
+                        let Some(matched) = constraint.advance(ways[way].matched, text.as_bytes()) else {
+                            continue;
+                        };
+                        let ending = Ending {
+                            rid: self.nodes[node].rid,
+                            matched,
+                            cost: ways[way].cost,
+                            way,
+                        };
+                        if digit {
+                            keep_cheapest(&mut endings[usize::from(before_suffix)], ending);
+                        } else {
+                            for kept in &mut endings {
+                                keep_cheapest(kept, ending);
+                            }
+                        }
+                    }
+                }
+            }
+            for node in self.beginning_at(position) {
+                let start = ways.len();
+                let Node { lid, cost, flags, .. } = self.nodes[node];
+                for ending in &endings[usize::from(flags & mozc::SUFFIX != 0)] {
+                    let total = ending.cost + i64::from(dictionary.connection(ending.rid, lid)) + i64::from(cost);
+                    let way = Way {
+                        node,
+                        matched: ending.matched,
+                        cost: total,
+                        from: ending.way,
+                    };
+                    if let Some(kept) = ways[start..].iter_mut().find(|kept| kept.matched == ending.matched) {
+                        if total < kept.cost {
+                            *kept = way;
+                        }
+                    } else {
+                        ways.push(way);
+                    }
+                }
+                ranges[node] = start..ways.len();
+            }
+        }
+        // The ends of the ways that reach the end of the reading, their last
+        // text written with nothing after it and the whole prefix matched.
+        let mut best: Option<(i64, usize)> = None;
+        for &node in &self.ends[length] {
+            text.clear();
+            self.push_text(&self.nodes[node], None, &mut text);
+            for way in ranges[node].clone() {
+                if constraint.advance(ways[way].matched, text.as_bytes()) != Some(constraint.prefix.len()) {
+                    continue;
+                }
+                let cost = ways[way].cost + i64::from(dictionary.connection(self.nodes[node].rid, 0));
+                if best.is_none_or(|(least, _)| cost < least) {
+                    best = Some((cost, way));
+                }
+            }
+        }
+        let (cost, last) = best?;
+        let mut nodes = Vec::new();
+        let mut way = last;
+        while way != NO_WAY {
+            nodes.push(ways[way].node);
+            way = ways[way].from;
+        }
+        nodes.reverse();
+        Some(Path { nodes, cost })
     }
 
     /// The cost of a path, recomputed from its nodes: for the tests of

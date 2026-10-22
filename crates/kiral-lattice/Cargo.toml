@@ -8,7 +8,7 @@
 
 [package]
 name = "kiral-lattice"
-description = "The lattice of a reading's words, and its best path by Viterbi"
+description = "The lattice of a reading's words, and its best path by Viterbi, within what a model wants or not"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true

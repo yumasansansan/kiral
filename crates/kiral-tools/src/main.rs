@@ -12,14 +12,16 @@
 //!   precision, by the most likely next token at each position.
 //! - `bench`: the time of KIRAL's computations, pinned: `bench kernels`, the
 //!   products in integers in each form; `bench model`, zenz's prompts and
-//!   steps of decoding.
+//!   steps of decoding; `bench load`, a model's loading.
 //! - `dict`: dictionary files, built from Mozc's open-source dictionary.
-//! - `eval`: the accuracy of a conversion against AJIMEE-Bench, and the items
-//!   it changed since the run before.
+//! - `eval`: the accuracy of a conversion against AJIMEE-Bench -- zenz's, a
+//!   dictionary's, the two together in KIRAL's engine, or Mozc's -- and the
+//!   items it changed since the run before.
 //! - `model`: model files, made from zenz as Hugging Face publishes it, and
 //!   checked.
 //! - `replay`: the time an input method takes for each key, typed as a user
-//!   types, on the processors asked for.
+//!   types, on the processors asked for; for KIRAL's engine, the time until
+//!   the model's refinement of each key comes besides.
 #![forbid(unsafe_code)]
 
 mod agree;

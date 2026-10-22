@@ -575,3 +575,36 @@ fn a_model_file_of_another_model_is_refused() {
     let parsed = ModelFile::parse(&written).expect("a model file");
     assert!(Zenz::from_file(&parsed).is_err(), "another architecture");
 }
+
+#[test]
+fn a_feed_from_a_row_gives_those_rows_of_a_feed_of_all_and_stops_where_asked() {
+    let mut random = Random(28);
+    let tensors = tensors(&mut random);
+    let bytes = file(&tensors);
+    let file = SafeTensors::parse(&bytes).expect("a file");
+    let ids = [3u32, 7, 1, 10, 0, 7];
+    for precision in [Precision::Single, Precision::Integers(Scheme::INT8)] {
+        let model = Gpt2::from_safetensors(&file, config(), precision).expect("a model");
+        let mut all = vec![0.0f32; ids.len() * VOCABULARY];
+        Session::new(&model, POSITIONS).feed_all(&ids, &mut all).expect("fed");
+        let mut session = Session::new(&model, POSITIONS);
+        let mut tail = vec![0.0f32; 2 * VOCABULARY];
+        let mut blocks = 0;
+        let mut stop_at_second = || {
+            blocks += 1;
+            blocks > 1
+        };
+        assert!(
+            !session.feed_from(&ids, 4, &mut tail, &mut stop_at_second).expect("fed"),
+            "stopped"
+        );
+        assert!(session.is_empty(), "nothing kept of a feeding stopped");
+        assert!(session.feed_from(&ids, 4, &mut tail, &mut || false).expect("fed"));
+        assert_eq!(session.len(), ids.len());
+        // The same rows of the same computation, the output layer left out for
+        // the others.
+        let expected: Vec<f64> = all[4 * VOCABULARY..].iter().copied().map(f64::from).collect();
+        let error = error_of(&tail, &expected);
+        assert!(error <= 1e-6, "{precision:?}: {error}");
+    }
+}

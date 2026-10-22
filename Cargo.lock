@@ -11,6 +11,18 @@ name = "kiral-dict"
 version = "0.1.0"
 
 [[package]]
+name = "kiral-engine"
+version = "0.1.0"
+dependencies = [
+ "kiral-dict",
+ "kiral-kernels",
+ "kiral-lattice",
+ "kiral-model",
+ "kiral-nn",
+ "kiral-sys",
+]
+
+[[package]]
 name = "kiral-kernels"
 version = "0.1.0"
 dependencies = [
@@ -46,6 +58,7 @@ version = "0.1.0"
 dependencies = [
  "kiral-cpu",
  "kiral-dict",
+ "kiral-engine",
  "kiral-kernels",
  "kiral-lattice",
  "kiral-model",

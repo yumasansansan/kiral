@@ -94,6 +94,27 @@ SPDX-License-Identifier: GPL-3.0-or-later
   | P コア（CPU 0，クロックの中央値 4.87 GHz） | 0.032 ms | 0.235 ms | 0.040 ms | 0.242 ms |
   | E コア（CPU 8，クロックの中央値 3.69 GHz） | 0.055 ms | 0.330 ms | 0.071 ms | 0.358 ms |
 
+- KIRAL のエンジン（`kiral-engine`）：辞書による変換を下書きとし，Zenzai と同じく zenz が検証します．プロンプトと下書きのトークンを一度にモデルへ与え（前に与えた列と共通する部分のキーと値は保持します），下書きの各トークンとその後の文末がどれもモデルの最も確からしいトークンなら，下書きをそのまま採ります．そうでない最初の位置では，モデルが受け入れた部分と代わりに望むトークンをテキストの制約とし，それを保つ最もコストの低い経路をラティスから探し直します（`Lattice::best_within`）．これを，モデルが下書きを受け入れるか，どの経路にもないテキストを望むまで繰り返します．変換は何があってもラティス上の経路です．モデルファイルから読んだ整数の zenz-v3.1-small と，Mozc と SudachiDict の core の名詞による辞書で，AJIMEE-Bench の 200 項目を締め切りのない明示的な変換として変換した結果：
+
+  | 往復の上限 | Acc@1 | CER | 1 項目あたりの往復 |
+  | ---: | ---: | ---: | ---: |
+  | 1 | 72.0 | 3.52 | 1.00 |
+  | 2 | 81.5 | 2.32 | 1.49 |
+  | 3 | 83.5 | 1.96 | 1.69 |
+  | 4 | 83.5 | 1.90 | 1.75 |
+  | 8 | 84.0 | 1.91 | 1.79 |
+
+  7 往復を超える項目はありません．186 項目ではモデルが下書きを受け入れ，そのどれもが zenz 自身の変換です．残る 14 項目は，辞書が書けないテキストをモデルが望むところで終わり，そのうち 6 項目は zenz 単体（87.0）なら正しく変換します．5 つは複数桁の数（45，1991，50，10，2005 と 26）で，辞書のかなで読む数字は 1 桁だけだからです．もう 1 つは辞書にない「夜駆け」です．zenz 単体が誤る項目を正すことはありません．
+
+  打ちながらの変換（`kiral-tools replay`，100 ms ごとに 1 かな）：入力スレッドは各キーで，直前の精緻化が残した制約の中でラティスから下書きを作り，読みをワーカーに渡します．ワーカーはそれを 1 往復で精緻化して返します（後のキーで古くなったものは，モデルのブロックの合間に確かめて捨てます）．Space は最大 8 往復の精緻化を 30 ms まで待ちます．50 項目を 2 回ずつ，バッテリー駆動（エネルギーの優先設定 `balance_power`）の i7-1360P で，ワーカーを同じ種類の別のコアに置いて測りました：
+
+  | 2 回ずつ | かな p50 | p99 | 精緻化 p50 | p99 | 次のキーまでに届いた数 | 締め切りまでに精緻化された Space | Space の Acc@1 |
+  | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+  | P コア（入力は CPU 0，ワーカーは CPU 2．クロックの中央値 1.80 GHz） | 0.45〜0.47 ms | 1.27〜1.50 ms | 42.9〜43.4 ms | 95.5〜96.6 ms | 1435 のうち 1384〜1387 | 50 のうち 45 | 82.0 |
+  | E コア（CPU 8，ワーカーは CPU 9．2.20 GHz） | 0.41〜0.42 ms | 1.15〜1.18 ms | 60.3〜60.4 ms | 98.6〜98.8 ms | 1435 のうち 734〜752 | 50 のうち 24 | 64.0〜66.0 |
+
+  モデルが動いている間も，入力スレッドでのキーの処理は 99 パーセンタイルで 2 ms に収まります．zenz のプロンプトは読みを変換の前に置くので，キーの精緻化は読みの新しいかな，その後のタグ，下書き全体をモデルに与え直します．バッテリー駆動のコアがキーの合間に保つクロックでは，P コアでの目標 15 ms の約 3 倍かかります．同じ 50 項目を締め切りなしで変換すると 42 項目が正解です．
+
 - 単精度のカーネル（`kiral-kernels`）：パネルにパックした重みによる線形層，LayerNorm，GELU，softmax，キャッシュに対する attention を，コンパイラがベクトル化するシンプルな Rust で書いています．どれも倍精度と比べてテストし，誤差を丸めの解析から導いた上界に収めています．長さはベクトルの幅の倍数でないものを使います．
 - AVX-VNNI のアセンブリによる整数の積（`crates/kiral-kernels/asm/x86_64/qgemm_avx_vnni.S`）．最初のアセンブリの形です．1〜6 行×16 列のタイルで，`vpdpbusd` がバイトの積 4 つを 1 レーンに足します．3 行以下では和を 2 組に分け，2 倍の連鎖を並べて走らせます．可搬な形と同じく行数ごとに倍精度と比べてテストし，プロセッサが AVX-VNNI を持ち環境が許すところで使います．16〜40 行で，i7-1360P の P コアで 179〜205 GMAC/s（可搬な形は 8〜10），E コアで 46〜48（可搬な形は 6.3〜6.7）です（`kiral-tools bench kernels`）．
 - 命令セットのレベル（`kiral-cpu`）：std の検出によるレベルと，その中からの選択です．`KIRAL_ISA=<レベル>` と `KIRAL_KERNELS=portable` で選択を抑えられます．
@@ -170,6 +191,14 @@ cargo run --release --locked -p kiral-tools -- replay --dict data/dictionaries/m
 ```
 
 ```bash
+cargo run --release --locked -p kiral-tools -- eval --model data/models/zenz-v3.1-small-int8.kmdl --dict data/dictionaries/mozc-sudachi.kdic
+```
+
+```bash
+cargo run --release --locked -p kiral-tools -- replay --model data/models/zenz-v3.1-small-int8.kmdl --dict data/dictionaries/mozc-sudachi.kdic --limit 50 --cpu p0:p2 --cpu e0:e1
+```
+
+```bash
 cargo run --release --locked -p kiral-tools -- eval --mozc
 ```
 
@@ -177,7 +206,7 @@ cargo run --release --locked -p kiral-tools -- eval --mozc
 cargo run --release --locked -p kiral-tools -- replay --mozc --cpu p0 --cpu e0
 ```
 
-このスクリプトは AJIMEE-Bench，zenz-v3.1-small，Mozc の辞書，SudachiDict を固定のリビジョンから `data/`（コミットしない）に取得し，`scripts/datasets.sha256` に記録した SHA-256 と照合します．`list` で取得元と利用条件を表示します．`model convert` は整数の zenz を `data/models/` に書き出します．`--source` は重みの出所で，ファイルの表示に入ります．`--model` は zenz のディレクトリを受け取るところならどこでもこのファイルを受け取ります（`agree` では `--quantized`）．`dict build` は，`--sudachi` なしでは Mozc の辞書だけで，`--lists small_lex.csv,core_lex.csv,notcore_lex.csv` では SudachiDict のすべてのリストを加えて作ります．各実行の結果は `bench/results/` に保存し，比較の基準となる数値は `bench/baselines.toml` にあります．Mozc の計測は Linux で，ヘルパーのためにパッケージ `emacs-mozc-bin` を入れて行います．
+このスクリプトは AJIMEE-Bench，zenz-v3.1-small，Mozc の辞書，SudachiDict を固定のリビジョンから `data/`（コミットしない）に取得し，`scripts/datasets.sha256` に記録した SHA-256 と照合します．`list` で取得元と利用条件を表示します．`eval` は `--model` と `--dict` を両方与えると KIRAL のエンジンで変換し（往復の上限は `--rounds`，標準で 8），`replay` は両方を与えるとエンジンに打ち込みます．ワーカーはコロンの後のプロセッサに固定します（i7-1360P では `p0` が CPU 0，`p2` が別のコアの CPU 2 で，`p1` は CPU 0 のもう一つのスレッドです）．`model convert` は整数の zenz を `data/models/` に書き出します．`--source` は重みの出所で，ファイルの表示に入ります．`--model` は zenz のディレクトリを受け取るところならどこでもこのファイルを受け取ります（`agree` では `--quantized`）．`dict build` は，`--sudachi` なしでは Mozc の辞書だけで，`--lists small_lex.csv,core_lex.csv,notcore_lex.csv` では SudachiDict のすべてのリストを加えて作ります．各実行の結果は `bench/results/` に保存し，比較の基準となる数値は `bench/baselines.toml` にあります．Mozc の計測は Linux で，ヘルパーのためにパッケージ `emacs-mozc-bin` を入れて行います．
 
 ## ライセンス
 

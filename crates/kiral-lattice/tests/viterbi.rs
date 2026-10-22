@@ -10,7 +10,11 @@
 //! and costs, the cheapest path [`Lattice::best`] finds costs what the cheapest
 //! of all the paths, enumerated one by one, costs, and what its own nodes add up
 //! to; and the texts the oracle says the lattice reaches are those of the paths.
-//! And the texts of paths: words written as typed, digits read in kana.
+//! Within a constraint, the cheapest path [`Lattice::best_within`] finds is the
+//! cheapest of those whose text the constraint admits, and there is none where
+//! no path's text is admitted, on dictionaries with digits read in kana and
+//! suffixes, whose texts depend on the next word. And the texts of paths: words
+//! written as typed, digits read in kana.
 
 use std::collections::BTreeSet;
 
@@ -18,7 +22,7 @@ use kiral_dict::Dictionary;
 use kiral_dict::file::{Unknown, build};
 use kiral_dict::mozc::{self, Matrix};
 use kiral_dict::{Metadata, Word};
-use kiral_lattice::Lattice;
+use kiral_lattice::{Constraint, Lattice};
 
 /// `SplitMix64`: a fixed stream of numbers, the same on every system.
 struct Random(u64);
@@ -40,14 +44,27 @@ impl Random {
 const KANA: [char; 4] = ['か', 'な', 'ん', 'ア'];
 
 fn dictionary(random: &mut Random, ids: u16) -> Vec<u8> {
+    dictionary_of(random, ids, false)
+}
+
+/// A dictionary of random words, with digits read in kana and suffixes of nouns
+/// among them where `digits`.
+fn dictionary_of(random: &mut Random, ids: u16, digits: bool) -> Vec<u8> {
     let words: Vec<Word> = (0..40)
-        .map(|number| Word {
-            reading: (0..=random.below(3)).map(|_| KANA[random.below(3)]).collect(),
-            surface: format!("{}", ['甲', '乙', '丙', '丁', 'か', 'な'][number % 6]),
-            lid: u16::try_from(1 + random.below(usize::from(ids) - 1)).expect("small"),
-            rid: u16::try_from(1 + random.below(usize::from(ids) - 1)).expect("small"),
-            cost: u16::try_from(random.below(5000)).expect("small"),
-            flags: 0,
+        .map(|number| {
+            let (surface, flags) = match number % 8 {
+                6 if digits => ((number % 10).to_string(), mozc::DIGIT),
+                7 if digits => ("年".to_owned(), mozc::SUFFIX),
+                _ => (['甲', '乙', '丙', '丁', 'か', 'な'][number % 6].to_string(), 0),
+            };
+            Word {
+                reading: (0..=random.below(3)).map(|_| KANA[random.below(3)]).collect(),
+                surface,
+                lid: u16::try_from(1 + random.below(usize::from(ids) - 1)).expect("small"),
+                rid: u16::try_from(1 + random.below(usize::from(ids) - 1)).expect("small"),
+                cost: u16::try_from(random.below(5000)).expect("small"),
+                flags,
+            }
         })
         .collect();
     let matrix = Matrix {
@@ -125,6 +142,81 @@ fn the_best_path_is_the_cheapest_of_all() {
                 assert!(lattice.reaches(text, false), "{reading}: {text}");
             }
             assert!(!lattice.reaches(&format!("{}x", texts.first().expect("a text")), false));
+        }
+    }
+}
+
+#[test]
+fn the_best_path_within_a_constraint_is_the_cheapest_it_admits() {
+    let mut random = Random(43);
+    for round in 0..20 {
+        let bytes = dictionary_of(&mut random, 6, true);
+        let dictionary = Dictionary::parse(&bytes).expect("a dictionary");
+        for _ in 0..10 {
+            let reading: String = (0..random.below(7)).map(|_| KANA[random.below(KANA.len())]).collect();
+            let lattice = Lattice::new(&dictionary, &reading);
+            let all: Vec<(String, i64)> = paths(&lattice, 0)
+                .into_iter()
+                .map(|nodes| {
+                    let cost = lattice.cost_of(&dictionary, &nodes);
+                    (lattice.text(&kiral_lattice::Path { nodes, cost }), cost)
+                })
+                .collect();
+            // The empty constraint; every prefix of some paths' texts, at every
+            // byte, characters cut short among them, and each whole text as a
+            // complete constraint; and constraints no text meets.
+            let mut constraints = vec![
+                Constraint::default(),
+                Constraint {
+                    prefix: "丁丁丁丁丁丁丁丁".as_bytes().to_vec(),
+                    complete: false,
+                },
+                Constraint {
+                    prefix: Vec::new(),
+                    complete: true,
+                },
+            ];
+            for _ in 0..3 {
+                let (text, _) = &all[random.below(all.len())];
+                for cut in 0..=text.len() {
+                    constraints.push(Constraint {
+                        prefix: text.as_bytes()[..cut].to_vec(),
+                        complete: false,
+                    });
+                }
+                constraints.push(Constraint {
+                    prefix: text.as_bytes().to_vec(),
+                    complete: true,
+                });
+                constraints.push(Constraint {
+                    prefix: [text.as_bytes(), "甲".as_bytes()].concat(),
+                    complete: false,
+                });
+            }
+            for constraint in &constraints {
+                let cheapest = all
+                    .iter()
+                    .filter(|(text, _)| constraint.admits(text))
+                    .map(|&(_, cost)| cost)
+                    .min();
+                let found = lattice.best_within(&dictionary, constraint);
+                let context = format!("round {round}, {reading}, {constraint:?}");
+                match (cheapest, found) {
+                    (None, None) => {}
+                    (Some(cost), Some(path)) => {
+                        assert_eq!(path.cost, cost, "{context}");
+                        assert_eq!(lattice.cost_of(&dictionary, &path.nodes), cost, "{context}");
+                        assert!(constraint.admits(&lattice.text(&path)), "{context}");
+                    }
+                    (cheapest, found) => panic!("{context}: {cheapest:?} against {found:?}"),
+                }
+            }
+            assert_eq!(
+                lattice
+                    .best_within(&dictionary, &Constraint::default())
+                    .map(|path| path.cost),
+                Some(lattice.best(&dictionary).cost)
+            );
         }
     }
 }

@@ -15,7 +15,9 @@
 # `replay` keeps the time an input method takes for each key of AJIMEE-Bench's
 # readings typed in romaji, and for each conversion with Space, in milliseconds:
 # the median and the 99th percentile, by the nearest rank, on one pinned core,
-# with the median of the clock read while it ran.
+# with the median of the clock read while it ran. For KIRAL's engine, a kana
+# every 100 ms, it keeps besides the time from a key to its refinement, of the
+# keys whose refinement came before the next, and the worker's core and clock.
 #
 # `kernels` keeps the multiply-adds a second, in billions, of the products in
 # integers of zenz's five layers (`kiral-tools bench kernels`), their weights in
@@ -59,6 +61,46 @@ accuracy = 87.0
 cer = 1.58
 with_context = { accuracy = 83.0, cer = 2.47 }
 without_context = { accuracy = 91.0, cer = 0.69 }
+
+[[ajimee]]
+system = "KIRAL's engine: the dictionary's drafts (mozc-sudachi) verified by zenz-v3.1-small in integers (its model file), up to 1 round (--rounds 1)"
+source = "kiral-tools eval --model --dict, 2026-10-23"
+accuracy = 72.0
+cer = 3.52
+with_context = { accuracy = 68.0, cer = 4.48 }
+without_context = { accuracy = 76.0, cer = 2.55 }
+
+[[ajimee]]
+system = "KIRAL's engine: the dictionary's drafts (mozc-sudachi) verified by zenz-v3.1-small in integers (its model file), up to 2 rounds (--rounds 2)"
+source = "kiral-tools eval --model --dict, 2026-10-23"
+accuracy = 81.5
+cer = 2.32
+with_context = { accuracy = 76.0, cer = 3.34 }
+without_context = { accuracy = 87.0, cer = 1.29 }
+
+[[ajimee]]
+system = "KIRAL's engine: the dictionary's drafts (mozc-sudachi) verified by zenz-v3.1-small in integers (its model file), up to 3 rounds (--rounds 3)"
+source = "kiral-tools eval --model --dict, 2026-10-23"
+accuracy = 83.5
+cer = 1.96
+with_context = { accuracy = 78.0, cer = 2.88 }
+without_context = { accuracy = 89.0, cer = 1.03 }
+
+[[ajimee]]
+system = "KIRAL's engine: the dictionary's drafts (mozc-sudachi) verified by zenz-v3.1-small in integers (its model file), up to 4 rounds (--rounds 4)"
+source = "kiral-tools eval --model --dict, 2026-10-23"
+accuracy = 83.5
+cer = 1.9
+with_context = { accuracy = 78.0, cer = 2.81 }
+without_context = { accuracy = 89.0, cer = 0.99 }
+
+[[ajimee]]
+system = "KIRAL's engine: the dictionary's drafts (mozc-sudachi) verified by zenz-v3.1-small in integers (its model file), up to 8 rounds (--rounds 8)"
+source = "kiral-tools eval --model --dict, 2026-10-23"
+accuracy = 84.0
+cer = 1.91
+with_context = { accuracy = 78.0, cer = 2.9 }
+without_context = { accuracy = 90.0, cer = 0.93 }
 
 [[ajimee]]
 system = "zenz-v3.1-small alone in integers, weights of 8 bits rotated in blocks of 256 by regular Hadamard matrices (--int8 --rotate 256)"
@@ -233,6 +275,24 @@ conversions = { count = 200, p50 = 0.071, p99 = 0.358 }
 system = "Mozc 2.28 (Ubuntu 24.04), conversions only, its IPC included"
 source = "earlier"
 conversions = { p50 = 2.1 }
+
+[[replay]]
+system = "KIRAL's engine: the dictionary's drafts (mozc-sudachi) refined by zenz-v3.1-small in integers (its model file) on a worker, a round a key, a kana every 100 ms; Space waits 30 ms for up to 8 rounds"
+source = "kiral-tools replay --model --dict --limit 50, 2026-10-23, two runs, on battery (energy preference balance_power)"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "P, typing on CPU 0, 0.46 and 0.43 GHz at the median; the worker on CPU 2, pinned, 1.80 GHz at the median of both"
+kana = { count = 1435, p50 = [0.451, 0.465], p99 = [1.266, 1.5] }
+refinements = { count = [1384, 1387], p50 = [43.382, 42.9], p99 = [95.529, 96.603] }
+conversions = { count = 50, refined = 45, p50 = [1.528, 1.63], p99 = [30.217, 30.191], correct = [41, 41] }
+
+[[replay]]
+system = "KIRAL's engine: the dictionary's drafts (mozc-sudachi) refined by zenz-v3.1-small in integers (its model file) on a worker, a round a key, a kana every 100 ms; Space waits 30 ms for up to 8 rounds"
+source = "kiral-tools replay --model --dict --limit 50, 2026-10-23, two runs, on battery (energy preference balance_power)"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "E, typing on CPU 8, 0.40 GHz at the median; the worker on CPU 9, pinned, 2.20 GHz at the median of both"
+kana = { count = 1435, p50 = [0.416, 0.406], p99 = [1.18, 1.147] }
+refinements = { count = [752, 734], p50 = [60.415, 60.301], p99 = [98.595, 98.788] }
+conversions = { count = 50, refined = 24, p50 = [30.106, 30.103], p99 = [30.141, 30.182], correct = [32, 33] }
 
 [[agree]]
 system = "zenz-v3.1-small, weights of 8 bits (--int8), the portable form, from the directory or from the model file"

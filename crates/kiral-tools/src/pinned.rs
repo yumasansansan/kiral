@@ -53,8 +53,27 @@ where
     T: Send,
     F: FnOnce() -> Result<T, String> + Send,
 {
+    run_on_beside(processor, None, work).map(|(result, clock, _)| (result, clock))
+}
+
+/// As [`run_on`], with the clock of another processor read beside, where the
+/// work has a thread of its own there: what the work returns, and the clocks of
+/// the two processors as text.
+///
+/// # Errors
+///
+/// Where the thread cannot be pinned, or the work fails.
+pub fn run_on_beside<T, F>(
+    processor: Option<usize>,
+    beside: Option<usize>,
+    work: F,
+) -> Result<(T, String, String), String>
+where
+    T: Send,
+    F: FnOnce() -> Result<T, String> + Send,
+{
     let done = AtomicBool::new(false);
-    let (result, samples) = std::thread::scope(|scope| {
+    let (result, samples, beside_samples) = std::thread::scope(|scope| {
         let worker = scope.spawn(|| {
             let result = match processor {
                 Some(processor) => kiral_sys::affinity::pin_current_thread(processor)
@@ -65,16 +84,19 @@ where
             done.store(true, Ordering::Release);
             result
         });
-        let mut samples = Vec::new();
+        let (mut samples, mut beside_samples) = (Vec::new(), Vec::new());
         while !done.load(Ordering::Acquire) {
-            if let Some(khz) = processor.and_then(topology::clock_khz) {
-                samples.push(khz);
-            }
+            samples.extend(processor.and_then(topology::clock_khz));
+            beside_samples.extend(beside.and_then(topology::clock_khz));
             std::thread::sleep(Duration::from_millis(20));
         }
-        (worker.join().expect("a worker that did not panic"), samples)
+        (
+            worker.join().expect("a worker that did not panic"),
+            samples,
+            beside_samples,
+        )
     });
-    Ok((result?, clock_of(samples)))
+    Ok((result?, clock_of(samples), clock_of(beside_samples)))
 }
 
 /// Where a run was made, for the log: the processor, its kind and its clock.

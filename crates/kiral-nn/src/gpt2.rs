@@ -773,7 +773,9 @@ impl<'m> Session<'m> {
             config.vocabulary,
             "logits of another length than the vocabulary"
         );
-        let (stream, mut room) = self.forward(tokens)?;
+        let (stream, mut room) = self
+            .forward(tokens, &mut || false)?
+            .expect("a forward pass that is never stopped");
         let last = &stream[(tokens.len() - 1) * config.width..];
         self.head(last, &mut room, output);
         Ok(())
@@ -797,15 +799,66 @@ impl<'m> Session<'m> {
             tokens.len() * self.model.config.vocabulary,
             "logits that are not a row of the vocabulary's for each token"
         );
-        let (stream, mut room) = self.forward(tokens)?;
+        let (stream, mut room) = self
+            .forward(tokens, &mut || false)?
+            .expect("a forward pass that is never stopped");
         self.head(&stream, &mut room, output);
         Ok(())
     }
 
+    /// Computes the tokens at the next positions, and writes the logits after
+    /// each of them from the `first`-th on, a row of the vocabulary's for each:
+    /// what checking a draft needs, the output layer left out for the rows of
+    /// the prompt before it. `stop` is asked before each block; where it says
+    /// to stop, the positions are not kept, the logits not written, and the
+    /// answer is false.
+    ///
+    /// # Errors
+    ///
+    /// Where there are no tokens, a token is out of the vocabulary, or the
+    /// positions would pass the room of the session.
+    ///
+    /// # Panics
+    ///
+    /// Where `first` is past the tokens, or `output` is not a row of logits
+    /// for each token from the `first`-th on.
+    pub fn feed_from(
+        &mut self,
+        tokens: &[u32],
+        first: usize,
+        output: &mut [f32],
+        stop: &mut dyn FnMut() -> bool,
+    ) -> Result<bool, Error> {
+        let config = self.model.config;
+        assert!(
+            first < tokens.len().max(1),
+            "logits from token {first} of {}",
+            tokens.len()
+        );
+        assert_eq!(
+            output.len(),
+            (tokens.len() - first) * config.vocabulary,
+            "logits that are not a row of the vocabulary's for each token from the {first}-th"
+        );
+        let Some((stream, mut room)) = self.forward(tokens, stop)? else {
+            return Ok(false);
+        };
+        self.head(&stream[first * config.width..], &mut room, output);
+        Ok(true)
+    }
+
+    /// The positions the session has room for.
+    #[must_use]
+    pub fn capacity(&self) -> usize {
+        self.capacity
+    }
+
     /// The residual stream after the blocks, of the tokens at the next
     /// positions, whose keys and values it caches; and the room it was
-    /// computed in.
-    fn forward(&mut self, tokens: &[u32]) -> Result<(Vec<f32>, Room), Error> {
+    /// computed in. None where `stop`, asked before each block, said to stop:
+    /// the keys and values written for the positions are then past the
+    /// session's length, and taken for nothing.
+    fn forward(&mut self, tokens: &[u32], stop: &mut dyn FnMut() -> bool) -> Result<Option<(Vec<f32>, Room)>, Error> {
         let model = self.model;
         let config = model.config;
         let rows = tokens.len();
@@ -822,10 +875,13 @@ impl<'m> Session<'m> {
         let mut stream = self.embed(tokens)?;
         let mut room = Room::new(&config, rows, self.length + rows);
         for (layer, block) in model.blocks.iter().enumerate() {
+            if stop() {
+                return Ok(None);
+            }
             self.block(layer, block, &mut stream, &mut room);
         }
         self.length += rows;
-        Ok((stream, room))
+        Ok(Some((stream, room)))
     }
 
     /// The logits of rows of the stream: each normalized, then its products

@@ -8,14 +8,18 @@
 
 //! `kiral-tools eval`: the accuracy of a conversion against AJIMEE-Bench.
 //!
-//! Two conversions are measured for now. zenz's alone, as the evaluation of a
-//! bare model takes it: zenz-v3's prompt, greedy decoding in single precision,
-//! no dictionary, each item on its own, the items shared out among threads. And
-//! Mozc's, as a user gets it: the reading typed in romaji into a Mozc of the
-//! run's own, one key at a time, and converted with Space, its first candidate of
-//! each segment, with no left context (Mozc takes none); the preedit typed is
-//! checked to be the reading, so that a key the table reads otherwise stops the
-//! run rather than measure another reading.
+//! Four conversions are measured. zenz's alone, as the evaluation of a bare
+//! model takes it: zenz-v3's prompt, greedy decoding, no dictionary, each item
+//! on its own, the items shared out among threads. The dictionary's alone: each
+//! reading's cheapest path, with no context. KIRAL's engine's, the two together:
+//! the dictionary's draft verified by zenz and searched again within what the
+//! model accepted, round after round, as an explicit conversion with no deadline
+//! takes them ([`kiral_engine::refine`]). And Mozc's, as a user gets it: the
+//! reading typed in romaji into a Mozc of the run's own, one key at a time, and
+//! converted with Space, its first candidate of each segment, with no left
+//! context (Mozc takes none); the preedit typed is checked to be the reading,
+//! so that a key the table reads otherwise stops the run rather than measure
+//! another reading.
 //!
 //! The run prints Acc@1 and the character error rate, of all the items and of
 //! those with and without left context; compares the run, item by item, with the
@@ -30,8 +34,9 @@ use std::time::Instant;
 
 use kiral_cpu::Features;
 use kiral_dict::Dictionary;
+use kiral_engine::refine::{self, Ending, ZenzJudge};
 use kiral_kernels::quantized::{Rotation, Scheme};
-use kiral_lattice::Lattice;
+use kiral_lattice::{Constraint, Lattice};
 use kiral_nn::gpt2::Precision;
 use kiral_nn::zenz::{Converter, Stop, Zenz, prompt};
 
@@ -42,12 +47,14 @@ use crate::mozc::{Mozc, Programs};
 use crate::{arguments, results, romaji};
 
 const USAGE: &str = "\
-usage: kiral-tools eval (--model <path> | --dict <file> | --mozc) [options]
+usage: kiral-tools eval (--model <path> [--dict <file>] | --dict <file> | --mozc) [options]
 
 The accuracy of a conversion against AJIMEE-Bench (JWTD_v2/v1): zenz alone
 (zenz-v3's prompt, greedy decoding, no dictionary), a dictionary alone (each
-reading's best path by Viterbi, no left context), or Mozc (the reading typed in
-romaji, converted with Space, no left context).
+reading's best path by Viterbi, no left context), KIRAL's engine (both: the
+dictionary's draft verified by zenz and searched again within what it accepted,
+round after round), or Mozc (the reading typed in romaji, converted with Space,
+no left context).
 
   --model <path>        zenz as Hugging Face publishes it, a directory of
                         config.json, model.safetensors, vocab.json, merges.txt
@@ -63,7 +70,9 @@ romaji, converted with Space, no left context).
   --fitted              each group of weights at the scale of least squared
                         error, not that of its greatest magnitude
   --dict <file>         a dictionary file, which kiral-tools dict build makes;
-                        the run says its oracle too
+                        alone, the run says its oracle too
+  --rounds <n>          the rounds of verification of the engine's conversion
+                        [8]
   --mozc                Mozc, through mozc_emacs_helper, with a profile of the
                         run's own that it removes after (Linux)
   --mozc-helper <path>  the helper [mozc_emacs_helper]
@@ -75,7 +84,8 @@ romaji, converted with Space, no left context).
   --label <name>        the name the results are kept and compared under
                         [the model's name, its directory's or the one its file
                         gives, with -int8 and the scheme's other choices in
-                        integers, dict-<name>, or mozc-<version>]
+                        integers, dict-<name>, both joined by + with -r<rounds>,
+                        or mozc-<version>]
   --against <file>      the results to compare with [the label's last]
   --results <directory> where results are kept [bench/results/ajimee]";
 
@@ -114,6 +124,7 @@ fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<(), String> {
             "results",
             "weight-bits",
             "rotate",
+            "rounds",
         ],
         &[],
         &["mozc", "int8", "fitted", "help"],
@@ -127,13 +138,16 @@ fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<(), String> {
         return Err(format!("no benchmark {bench}: the one there is is ajimee"));
     }
     let model = options.path("model");
-    let systems =
-        usize::from(model.is_some()) + usize::from(options.flag("mozc")) + usize::from(options.value("dict").is_some());
-    if systems != 1 {
-        return Err(format!("one of --model, --dict and --mozc\n\n{USAGE}"));
+    let dictionary = options.path("dict");
+    let mozc = options.flag("mozc");
+    if mozc == (model.is_some() || dictionary.is_some()) {
+        return Err(format!("--model, --dict, both, or --mozc\n\n{USAGE}"));
     }
     if scheme_of(&options)?.is_some() && model.is_none() {
         return Err(format!("--int8 and its scheme are for --model\n\n{USAGE}"));
+    }
+    if options.value("rounds").is_some() && (model.is_none() || dictionary.is_none()) {
+        return Err(format!("--rounds is for --model with --dict\n\n{USAGE}"));
     }
     let items = ajimee::load(options.path("items"), options.parsed::<usize>("limit")?)?;
     let kept = options
@@ -141,12 +155,11 @@ fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<(), String> {
         .unwrap_or_else(|| PathBuf::from("bench/results/ajimee"));
 
     let started = Instant::now();
-    let (label, conversions) = if let Some(model) = model {
-        with_zenz(&options, &model, &items)?
-    } else if let Some(path) = options.path("dict") {
-        with_dictionary(&options, &path, &items)?
-    } else {
-        with_mozc(&options, &items)?
+    let (label, conversions) = match (&model, &dictionary) {
+        (Some(model), Some(dictionary)) => with_engine(&options, model, dictionary, &items)?,
+        (Some(model), None) => with_zenz(&options, model, &items)?,
+        (None, Some(dictionary)) => with_dictionary(&options, dictionary, &items)?,
+        (None, None) => with_mozc(&options, &items)?,
     };
     report(
         &options,
@@ -183,6 +196,165 @@ fn with_zenz(options: &arguments::Options, model: &Path, items: &[Item]) -> Resu
     );
     println!("{}; {threads} threads, kernels in {}", machine(), kernels());
     Ok((label, convert_with_zenz(&zenz, items, threads)?))
+}
+
+/// The rounds of the engine's conversion that `eval` takes unless told: those of
+/// an explicit conversion of the engine's.
+const ROUNDS: usize = 8;
+
+/// The engine's conversions -- the dictionary's drafts verified by zenz, round
+/// after round, as an explicit conversion with no deadline takes them -- and
+/// the label of their results; with how the conversions ended, the rounds they
+/// took, and the tokens the model was fed.
+fn with_engine(
+    options: &arguments::Options,
+    model: &Path,
+    dictionary_path: &Path,
+    items: &[Item],
+) -> Result<(String, Vec<Converted>), String> {
+    let source = Source::open(model)?;
+    let zenz = source.zenz(scheme_of(options)?)?;
+    let bytes = std::fs::read(dictionary_path).map_err(|error| {
+        format!(
+            "{}: {error} (kiral-tools dict build makes one)",
+            dictionary_path.display()
+        )
+    })?;
+    let dictionary = Dictionary::parse(&bytes).map_err(|error| format!("{}: {error}", dictionary_path.display()))?;
+    let rounds = options.parsed::<usize>("rounds")?.unwrap_or(ROUNDS);
+    let threads = match options.parsed::<usize>("threads")? {
+        Some(threads) => threads.max(1),
+        None => std::thread::available_parallelism().map_or(1, usize::from),
+    }
+    .min(items.len());
+    let precision = zenz.model.precision();
+    let model_name = match precision {
+        Precision::Single => source.name(),
+        Precision::Integers(scheme) => format!("{}-{}", source.name(), scheme_label(&scheme)),
+    };
+    let label = options
+        .text("label")
+        .unwrap_or_else(|| format!("{model_name}+dict-{}-r{rounds}", dictionary.metadata().name));
+    println!(
+        "AJIMEE-Bench JWTD_v2/v1, {} items: {label}, the dictionary {}'s drafts verified by zenz, up to {rounds} \
+         rounds (zenz-v3's prompt, {})",
+        items.len(),
+        dictionary.metadata().name,
+        precision_name(precision)
+    );
+    println!("{}; {threads} threads, kernels in {}", machine(), kernels());
+    let (conversions, refined, fed) = convert_with_engine(&zenz, &dictionary, items, threads, rounds)?;
+    let ending = |wanted: Ending| refined.iter().filter(|refined| refined.ending == wanted).count();
+    println!(
+        "  endings: the model accepted the draft {}, wanted a text no path has {}, a token the draft spells \
+         otherwise {}, the rounds ran out {}",
+        ending(Ending::Accepted),
+        ending(Ending::NoPath),
+        ending(Ending::NoProgress),
+        ending(Ending::Limit)
+    );
+    let mut taken: Vec<usize> = refined.iter().map(|refined| refined.rounds).collect();
+    taken.sort_unstable();
+    let histogram = (1..=taken.last().copied().unwrap_or(0))
+        .map(|round| format!("{round}: {}", taken.iter().filter(|&&taken| taken == round).count()))
+        .collect::<Vec<_>>()
+        .join(", ");
+    println!(
+        "  rounds: {} in all, {:.2} an item, the median {} ({histogram}); tokens fed to the model {fed}, {:.1} an item",
+        taken.iter().sum::<usize>(),
+        count(taken.iter().sum::<usize>()) / count(items.len()),
+        taken.get(taken.len() / 2).copied().unwrap_or(0),
+        count(fed) / count(items.len())
+    );
+    Ok((label, conversions))
+}
+
+/// Converts every item with the engine's refinement, the items shared out among
+/// threads, each with a judge of its own: the conversions, their refinements,
+/// and the tokens fed to the model in all.
+fn convert_with_engine(
+    zenz: &Zenz<'_>,
+    dictionary: &Dictionary<'_>,
+    items: &[Item],
+    threads: usize,
+    rounds: usize,
+) -> Result<(Vec<Converted>, Vec<refine::Refined>, usize), String> {
+    // Room for the longest prompt and a draft of four tokens a character, the
+    // most a character of UTF-8 takes.
+    let capacity = items
+        .iter()
+        .map(|item| {
+            refine::prompt_tokens(&zenz.tokenizer, &item.reading, &item.context).len()
+                + limit(item)
+                + item.reading.chars().count()
+        })
+        .max()
+        .unwrap_or(1)
+        .min(zenz.model.config().positions);
+    let next = AtomicUsize::new(0);
+    let done = AtomicUsize::new(0);
+    let fed = AtomicUsize::new(0);
+    let mut outcomes: Vec<Option<Result<refine::Refined, String>>> = vec![None; items.len()];
+    std::thread::scope(|scope| {
+        let workers = (0..threads)
+            .map(|_| {
+                scope.spawn(|| {
+                    let mut judge = ZenzJudge::new(zenz, capacity);
+                    let mut results = Vec::new();
+                    loop {
+                        let index = next.fetch_add(1, Ordering::Relaxed);
+                        let Some(item) = items.get(index) else {
+                            break;
+                        };
+                        let lattice = Lattice::new(dictionary, &item.reading);
+                        let prompt = refine::prompt_tokens(&zenz.tokenizer, &item.reading, &item.context);
+                        let outcome = refine::refine(
+                            dictionary,
+                            &lattice,
+                            &zenz.tokenizer,
+                            &mut judge,
+                            &prompt,
+                            &Constraint::default(),
+                            rounds,
+                            &mut || false,
+                        )
+                        .map(|refined| refined.expect("a refinement that is never stopped"))
+                        .map_err(|error| format!("item {}: {error}", item.index));
+                        results.push((index, outcome));
+                        let finished = done.fetch_add(1, Ordering::Relaxed) + 1;
+                        if finished.is_multiple_of(20) || finished == items.len() {
+                            eprint!("\r{finished} of {} items", items.len());
+                        }
+                    }
+                    fed.fetch_add(judge.tokens_fed(), Ordering::Relaxed);
+                    results
+                })
+            })
+            .collect::<Vec<_>>();
+        for worker in workers {
+            for (index, outcome) in worker.join().expect("a worker that did not panic") {
+                outcomes[index] = Some(outcome);
+            }
+        }
+    });
+    eprintln!();
+    let refined = outcomes
+        .into_iter()
+        .map(|outcome| outcome.expect("every item converted"))
+        .collect::<Result<Vec<_>, String>>()?;
+    let conversions = refined
+        .iter()
+        .map(|refined| Converted {
+            text: refined.text.clone(),
+            stop: match refined.ending {
+                Ending::Accepted => "accepted",
+                Ending::NoPath => "no-path",
+                Ending::NoProgress => "no-progress",
+                Ending::Limit => "round-limit",
+            },
+        })
+        .collect();
+    Ok((conversions, refined, fed.into_inner()))
 }
 
 /// Mozc's conversions, and the label of their results.
