@@ -7,8 +7,19 @@ name = "kiral-cpu"
 version = "0.1.0"
 
 [[package]]
+name = "kiral-dict"
+version = "0.1.0"
+
+[[package]]
 name = "kiral-kernels"
 version = "0.1.0"
+
+[[package]]
+name = "kiral-lattice"
+version = "0.1.0"
+dependencies = [
+ "kiral-dict",
+]
 
 [[package]]
 name = "kiral-model"
@@ -31,6 +42,8 @@ name = "kiral-tools"
 version = "0.1.0"
 dependencies = [
  "kiral-cpu",
+ "kiral-dict",
+ "kiral-lattice",
  "kiral-model",
  "kiral-nn",
  "kiral-sys",

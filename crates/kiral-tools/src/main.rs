@@ -8,6 +8,7 @@
 
 //! `kiral-tools`, KIRAL's command line.
 //!
+//! - `dict`: dictionary files, built from Mozc's open-source dictionary.
 //! - `eval`: the accuracy of a conversion against AJIMEE-Bench, and the items
 //!   it changed since the run before.
 //! - `replay`: the time an input method takes for each key, typed as a user
@@ -16,6 +17,7 @@
 
 mod ajimee;
 mod arguments;
+mod dict;
 mod eval;
 mod metrics;
 mod mozc;
@@ -30,6 +32,7 @@ const USAGE: &str = "\
 usage: kiral-tools <command> [options]
 
 commands:
+  dict    dictionary files: dict build (kiral-tools dict help)
   eval    the accuracy of a conversion against AJIMEE-Bench (kiral-tools eval --help)
   replay  the time of each key typed into an input method (kiral-tools replay --help)";
 
@@ -37,6 +40,7 @@ fn main() -> ExitCode {
     let mut arguments = std::env::args_os().skip(1);
     let command = arguments.next().map(|command| command.to_string_lossy().into_owned());
     match command.as_deref() {
+        Some("dict") => dict::main(arguments),
         Some("eval") => eval::main(arguments),
         Some("replay") => replay::main(arguments),
         Some("help" | "--help" | "-h") => {

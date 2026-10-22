@@ -32,6 +32,15 @@ with_context = { accuracy = 83.0, cer = 2.47 }
 without_context = { accuracy = 91.0, cer = 0.69 }
 
 [[ajimee]]
+system = "KIRAL's dictionary alone, built from Mozc's open-source dictionary (f183d4d3): Viterbi, no context"
+source = "kiral-tools eval --dict, 2026-10-23"
+accuracy = 53.0
+cer = 6.55
+with_context = { accuracy = 49.0, cer = 8.46 }
+without_context = { accuracy = 57.0, cer = 4.64 }
+oracle = { words_alone = 98.0, with_characters_of_no_reading = 98.0 }
+
+[[ajimee]]
 system = "Mozc 2.29.5160.102 (Ubuntu 26.10): typed in romaji, converted with Space, no context"
 source = "kiral-tools eval --mozc, 2026-10-23"
 accuracy = 47.5
@@ -108,6 +117,22 @@ machine = "Intel Core i7-1360P, Ubuntu 26.10"
 core = "E, CPU 8, pinned, 3.70 GHz at the median"
 keys = { count = 10151, p50 = 1.246, p99 = 5.706 }
 conversions = { count = 200, p50 = 2.144, p99 = 11.108 }
+
+[[replay]]
+system = "KIRAL's dictionary alone (mozc-oss): a kana at a time, each prefix converted from its lattice up"
+source = "kiral-tools replay --dict, 2026-10-23"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "P, CPU 0, pinned, 5.00 GHz at the median"
+kana = { count = 5820, p50 = 0.026, p99 = 0.174 }
+conversions = { count = 200, p50 = 0.033, p99 = 0.214 }
+
+[[replay]]
+system = "KIRAL's dictionary alone (mozc-oss): a kana at a time, each prefix converted from its lattice up"
+source = "kiral-tools replay --dict, 2026-10-23"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "E, CPU 8, pinned, 3.70 GHz at the median"
+kana = { count = 5820, p50 = 0.046, p99 = 0.272 }
+conversions = { count = 200, p50 = 0.059, p99 = 0.302 }
 
 [[replay]]
 system = "Mozc 2.28 (Ubuntu 24.04), conversions only, its IPC included"

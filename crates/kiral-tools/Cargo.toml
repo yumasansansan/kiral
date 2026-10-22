@@ -22,6 +22,8 @@ path = "src/main.rs"
 
 [dependencies]
 kiral-cpu = { path = "../kiral-cpu" }
+kiral-dict = { path = "../kiral-dict" }
+kiral-lattice = { path = "../kiral-lattice" }
 kiral-model = { path = "../kiral-model" }
 kiral-nn = { path = "../kiral-nn" }
 kiral-sys = { path = "../kiral-sys" }

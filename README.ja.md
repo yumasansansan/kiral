@@ -39,6 +39,13 @@ SPDX-License-Identifier: GPL-3.0-or-later
   | P コア（CPU 0，クロックの中央値 4.76 GHz） | 0.83 ms | 3.79 ms | 1.36 ms | 7.64 ms |
   | E コア（CPU 8，クロックの中央値 3.70 GHz） | 1.25 ms | 5.71 ms | 2.14 ms | 11.11 ms |
 
+- KIRAL の辞書（`kiral-dict`）とラティス（`kiral-lattice`）：`kiral-tools dict build` は，Mozc のオープンソース辞書から辞書ファイルを作ります．語を読みのダブル配列トライで引けるようにし，品詞の連接コストの表を持たせたもので，ファイルのままの場所で読みます（[docs/DICT-FORMAT.md](docs/DICT-FORMAT.md)）．読みのラティスは読みのどこかに当たるすべての語を持ち，Viterbi で最もコストの低い経路を求めます．文脈を使わない辞書だけの変換で Acc@1 53.0，CER 6.55（左文脈あり 49.0 / 8.46，なし 57.0 / 4.64）．Mozc 2.29 が誤る項目のうち 19 を正し，正しい項目のうち 8 を誤ります（McNemar の p 0.052）．200 項目のうち 196（98.0%）では，許容される変換のどれかがラティス上の経路になっています．1 かなずつ打ち，そのたびに読みの先頭からラティスを作り直して変換したときの時間（i7-1360P）：
+
+  | 辞書だけの変換 | かな p50 | p99 | 変換 p50 | p99 |
+  | --- | ---: | ---: | ---: | ---: |
+  | P コア（CPU 0，クロックの中央値 5.00 GHz） | 0.026 ms | 0.174 ms | 0.033 ms | 0.214 ms |
+  | E コア（CPU 8，クロックの中央値 3.70 GHz） | 0.046 ms | 0.272 ms | 0.059 ms | 0.302 ms |
+
 - 単精度のカーネル（`kiral-kernels`）：パネルにパックした重みによる線形層，LayerNorm，GELU，softmax，キャッシュに対する attention を，コンパイラがベクトル化するシンプルな Rust で書いています．どれも倍精度と比べてテストし，誤差を丸めの解析から導いた上界に収めています．長さはベクトルの幅の倍数でないものを使います．
 - 命令セットのレベル（`kiral-cpu`）：std の検出によるレベルと，その中からの選択です．`KIRAL_ISA=<レベル>` と `KIRAL_KERNELS=portable` で選択を抑えられます．
 - 手書きの safetensors と JSON の読み取り（`kiral-model`）：どんなバイト列も受け付け，読めないものはパニックではなくエラーにします．
@@ -70,6 +77,22 @@ cargo run --release --locked -p kiral-tools -- eval --model data/zenz-v3.1-small
 ```
 
 ```bash
+python3 scripts/fetch_datasets.py fetch mozc-dictionary
+```
+
+```bash
+cargo run --release --locked -p kiral-tools -- dict build --mozc data/mozc-dictionary --output data/dictionaries/mozc-oss.kdic
+```
+
+```bash
+cargo run --release --locked -p kiral-tools -- eval --dict data/dictionaries/mozc-oss.kdic
+```
+
+```bash
+cargo run --release --locked -p kiral-tools -- replay --dict data/dictionaries/mozc-oss.kdic --cpu p0 --cpu e0
+```
+
+```bash
 cargo run --release --locked -p kiral-tools -- eval --mozc
 ```
 
@@ -77,10 +100,10 @@ cargo run --release --locked -p kiral-tools -- eval --mozc
 cargo run --release --locked -p kiral-tools -- replay --mozc --cpu p0 --cpu e0
 ```
 
-このスクリプトは AJIMEE-Bench と zenz-v3.1-small を固定のリビジョンから `data/`（コミットしない）に取得し，`scripts/datasets.sha256` に記録した SHA-256 と照合します．`list` で取得元と利用条件を表示します．各実行の結果は `bench/results/` に保存し，比較の基準となる数値は `bench/baselines.toml` にあります．Mozc の計測は Linux で，ヘルパーのためにパッケージ `emacs-mozc-bin` を入れて行います．
+このスクリプトは AJIMEE-Bench，zenz-v3.1-small，Mozc の辞書を固定のリビジョンから `data/`（コミットしない）に取得し，`scripts/datasets.sha256` に記録した SHA-256 と照合します．`list` で取得元と利用条件を表示します．各実行の結果は `bench/results/` に保存し，比較の基準となる数値は `bench/baselines.toml` にあります．Mozc の計測は Linux で，ヘルパーのためにパッケージ `emacs-mozc-bin` を入れて行います．
 
 ## ライセンス
 
 KIRAL のコードは GNU General Public License バージョン 3 またはそれ以降のバージョン（`LICENSES/GPL-3.0-or-later.txt`）です．各ファイルは [REUSE](https://reuse.software/) 仕様の形式で著作権者とライセンスを示し，`reuse lint` で検査しています．
 
-モデルとデータはリポジトリに含めません．それぞれの提供元のライセンスに従う別のファイルで，計測する人が取得します．zenz-v3.1-small は CC BY-SA 4.0（Keita Miwa 氏，ku-nlp の gpt2-small-japanese-char（CC BY-SA 4.0）からのファインチューニング），AJIMEE-Bench のデータは京都大学の日本語 Wikipedia 入力誤りデータセット (v2) に由来する CC BY-SA 3.0 です．
+モデルとデータはリポジトリに含めません．それぞれの提供元のライセンスに従う別のファイルで，計測する人が取得します．zenz-v3.1-small は CC BY-SA 4.0（Keita Miwa 氏，ku-nlp の gpt2-small-japanese-char（CC BY-SA 4.0）からのファインチューニング），AJIMEE-Bench のデータは京都大学の日本語 Wikipedia 入力誤りデータセット (v2) に由来する CC BY-SA 3.0 です．Mozc のオープンソース辞書は IPAdic の条件に従い，Google の追加分は Mozc の BSD-3-Clause，沖縄辞書の語はパブリックドメインです．そこから作った辞書ファイルも同じ条件に従い，その表示をファイルの中に持ちます．

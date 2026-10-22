@@ -9,7 +9,7 @@
 """Fetch what KIRAL is measured with, into data/: the benchmark and the models.
 
     python scripts/fetch_datasets.py list
-    python scripts/fetch_datasets.py fetch ajimee [zenz-v3.1-small] [--record]
+    python scripts/fetch_datasets.py fetch ajimee [zenz-v3.1-small] [mozc-dictionary] [--record]
 
 None of it is this project's. Each set comes under terms of its own, which `list`
 shows with where they are written, and none of it may be committed (data/ is
@@ -40,6 +40,7 @@ CHUNK: Final = 1 << 20
 
 AJIMEE_REVISION: Final = "401666cd56d1a570c2021798b64b6da4396bfd45"
 ZENZ_V31_SMALL_REVISION: Final = "344612e331bf3ba752a9bfef6633c93c6b933ebb"
+MOZC_REVISION: Final = "f183d4d3a7ba139d7cb2252c05f608e9f8266aef"
 
 
 @dataclasses.dataclass(frozen=True)
@@ -107,7 +108,32 @@ ZENZ_V31_SMALL: Final = Dataset(
     ],
 )
 
-DATASETS: Final = {dataset.name: dataset for dataset in (AJIMEE, ZENZ_V31_SMALL)}
+MOZC_DICTIONARY: Final = Dataset(
+    name="mozc-dictionary",
+    title="Mozc's open-source dictionary: its words, the costs of their connections, its parts of speech, its suffixes",
+    source=f"https://github.com/google/mozc/tree/{MOZC_REVISION}/src/data/dictionary_oss",
+    terms=(
+        "IPAdic's license (NAIST's notice, and ICOT's terms with their NO WARRANTY section, to go with every copy), "
+        "the Okinawa dictionary in the public domain, and Google's additions under Mozc's BSD-3-Clause license, as "
+        "the README.txt and LICENSE fetched with it say. A dictionary file built from it goes under the same terms, "
+        "with their text in it."
+    ),
+    files=[
+        *(
+            github("google/mozc", MOZC_REVISION, f"src/data/dictionary_oss/{name}", name)
+            for name in (
+                *(f"dictionary{number:02d}.txt" for number in range(10)),
+                "connection_single_column.txt",
+                "id.def",
+                "suffix.txt",
+                "README.txt",
+            )
+        ),
+        github("google/mozc", MOZC_REVISION, "LICENSE", "LICENSE"),
+    ],
+)
+
+DATASETS: Final = {dataset.name: dataset for dataset in (AJIMEE, ZENZ_V31_SMALL, MOZC_DICTIONARY)}
 
 
 def read_digests() -> dict[str, str]:

@@ -29,6 +29,8 @@ use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Instant;
 
 use kiral_cpu::{Choice, Features, Request};
+use kiral_dict::Dictionary;
+use kiral_lattice::Lattice;
 use kiral_nn::zenz::{Converter, Stop, Zenz, prompt};
 
 use crate::ajimee::{self, Item};
@@ -37,15 +39,18 @@ use crate::mozc::{Mozc, Programs};
 use crate::{arguments, results, romaji};
 
 const USAGE: &str = "\
-usage: kiral-tools eval (--model <directory> | --mozc) [options]
+usage: kiral-tools eval (--model <directory> | --dict <file> | --mozc) [options]
 
 The accuracy of a conversion against AJIMEE-Bench (JWTD_v2/v1): zenz alone
-(zenz-v3's prompt, greedy decoding in single precision, no dictionary), or Mozc
-(the reading typed in romaji, converted with Space, no left context).
+(zenz-v3's prompt, greedy decoding in single precision, no dictionary), a
+dictionary alone (each reading's best path by Viterbi, no left context), or
+Mozc (the reading typed in romaji, converted with Space, no left context).
 
   --model <directory>   zenz as Hugging Face publishes it: config.json,
                         model.safetensors, vocab.json, merges.txt and
                         special_tokens_map.json (a file in it names it too)
+  --dict <file>         a dictionary file, which kiral-tools dict build makes;
+                        the run says its oracle too
   --mozc                Mozc, through mozc_emacs_helper, with a profile of the
                         run's own that it removes after (Linux)
   --mozc-helper <path>  the helper [mozc_emacs_helper]
@@ -55,7 +60,8 @@ The accuracy of a conversion against AJIMEE-Bench (JWTD_v2/v1): zenz alone
   --limit <n>           the first n items only
   --threads <n>         the threads zenz's items are shared among [all]
   --label <name>        the name the results are kept and compared under
-                        [the model's directory's name, or mozc-<version>]
+                        [the model's directory's name, dict-<name>, or
+                        mozc-<version>]
   --against <file>      the results to compare with [the label's last]
   --results <directory> where results are kept [bench/results/ajimee]";
 
@@ -82,6 +88,7 @@ fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<(), String> {
         arguments,
         &[
             "model",
+            "dict",
             "mozc-helper",
             "mozc-server",
             "bench",
@@ -104,8 +111,10 @@ fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<(), String> {
         return Err(format!("no benchmark {bench}: the one there is is ajimee"));
     }
     let model = options.path("model");
-    if model.is_some() == options.flag("mozc") {
-        return Err(format!("one of --model and --mozc\n\n{USAGE}"));
+    let systems =
+        usize::from(model.is_some()) + usize::from(options.flag("mozc")) + usize::from(options.value("dict").is_some());
+    if systems != 1 {
+        return Err(format!("one of --model, --dict and --mozc\n\n{USAGE}"));
     }
     let items = ajimee::load(options.path("items"), options.parsed::<usize>("limit")?)?;
     let kept = options
@@ -114,44 +123,11 @@ fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<(), String> {
 
     let started = Instant::now();
     let (label, conversions) = if let Some(model) = model {
-        let directory = Zenz::directory_of(&model);
-        let threads = match options.parsed::<usize>("threads")? {
-            Some(threads) => threads.max(1),
-            None => std::thread::available_parallelism().map_or(1, usize::from),
-        }
-        .min(items.len());
-        let label = options.text("label").unwrap_or_else(|| {
-            directory
-                .file_name()
-                .map_or_else(|| "zenz".to_owned(), |name| name.to_string_lossy().into_owned())
-        });
-        let zenz = Zenz::load(&directory).map_err(|error| format!("{}: {error}", directory.display()))?;
-        println!(
-            "AJIMEE-Bench JWTD_v2/v1, {} items: {label}, zenz alone (zenz-v3's prompt, greedy, single precision)",
-            items.len()
-        );
-        println!("{}; {threads} threads, kernels in {}", machine(), kernels());
-        (label, convert_with_zenz(&zenz, &items, threads)?)
+        with_zenz(&options, &model, &items)?
+    } else if let Some(path) = options.path("dict") {
+        with_dictionary(&options, &path, &items)?
     } else {
-        let programs = Programs {
-            helper: options
-                .path("mozc-helper")
-                .unwrap_or_else(|| Programs::default().helper),
-            server: options
-                .path("mozc-server")
-                .unwrap_or_else(|| Programs::default().server),
-        };
-        let mut mozc = Mozc::start(&programs)?;
-        let label = options
-            .text("label")
-            .unwrap_or_else(|| format!("mozc-{}", mozc.version()));
-        println!(
-            "AJIMEE-Bench JWTD_v2/v1, {} items: {label}, Mozc {} (typed in romaji, Space, no context)",
-            items.len(),
-            mozc.version()
-        );
-        println!("{}; one session, nothing committed", machine());
-        (label, convert_with_mozc(&mut mozc, &items)?)
+        with_mozc(&options, &items)?
     };
     report(
         &options,
@@ -161,6 +137,100 @@ fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<(), String> {
         started.elapsed().as_secs_f64(),
         &kept,
     )
+}
+
+/// zenz's conversions, and the label of their results.
+fn with_zenz(options: &arguments::Options, model: &Path, items: &[Item]) -> Result<(String, Vec<Converted>), String> {
+    let directory = Zenz::directory_of(model);
+    let threads = match options.parsed::<usize>("threads")? {
+        Some(threads) => threads.max(1),
+        None => std::thread::available_parallelism().map_or(1, usize::from),
+    }
+    .min(items.len());
+    let label = options.text("label").unwrap_or_else(|| {
+        directory
+            .file_name()
+            .map_or_else(|| "zenz".to_owned(), |name| name.to_string_lossy().into_owned())
+    });
+    let zenz = Zenz::load(&directory).map_err(|error| format!("{}: {error}", directory.display()))?;
+    println!(
+        "AJIMEE-Bench JWTD_v2/v1, {} items: {label}, zenz alone (zenz-v3's prompt, greedy, single precision)",
+        items.len()
+    );
+    println!("{}; {threads} threads, kernels in {}", machine(), kernels());
+    Ok((label, convert_with_zenz(&zenz, items, threads)?))
+}
+
+/// Mozc's conversions, and the label of their results.
+fn with_mozc(options: &arguments::Options, items: &[Item]) -> Result<(String, Vec<Converted>), String> {
+    let programs = Programs {
+        helper: options
+            .path("mozc-helper")
+            .unwrap_or_else(|| Programs::default().helper),
+        server: options
+            .path("mozc-server")
+            .unwrap_or_else(|| Programs::default().server),
+    };
+    let mut mozc = Mozc::start(&programs)?;
+    let label = options
+        .text("label")
+        .unwrap_or_else(|| format!("mozc-{}", mozc.version()));
+    println!(
+        "AJIMEE-Bench JWTD_v2/v1, {} items: {label}, Mozc {} (typed in romaji, Space, no context)",
+        items.len(),
+        mozc.version()
+    );
+    println!("{}; one session, nothing committed", machine());
+    Ok((label, convert_with_mozc(&mut mozc, items)?))
+}
+
+/// The dictionary's conversions alone -- each reading's best path by Viterbi,
+/// with no context -- and the label of their results; and the oracle: how many
+/// items have an accepted conversion that is a path of their lattice, of the
+/// dictionary's words alone, and with characters of no reading as well.
+fn with_dictionary(
+    options: &arguments::Options,
+    path: &Path,
+    items: &[Item],
+) -> Result<(String, Vec<Converted>), String> {
+    let bytes = std::fs::read(path)
+        .map_err(|error| format!("{}: {error} (kiral-tools dict build makes one)", path.display()))?;
+    let dictionary = Dictionary::parse(&bytes).map_err(|error| format!("{}: {error}", path.display()))?;
+    let metadata = dictionary.metadata();
+    let label = options
+        .text("label")
+        .unwrap_or_else(|| format!("dict-{}", metadata.name));
+    println!(
+        "AJIMEE-Bench JWTD_v2/v1, {} items: {label}, the dictionary alone (Viterbi, no context)",
+        items.len()
+    );
+    println!(
+        "{}; {} readings, {} entries, {}",
+        machine(),
+        dictionary.readings(),
+        dictionary.entries(),
+        metadata.license
+    );
+    let mut conversions = Vec::with_capacity(items.len());
+    let (mut known, mut any) = (0, 0);
+    for item in items {
+        let lattice = Lattice::new(&dictionary, &item.reading);
+        let best = lattice.best(&dictionary);
+        conversions.push(Converted {
+            text: lattice.text(&best),
+            stop: "dict",
+        });
+        known += usize::from(item.expected.iter().any(|expected| lattice.reaches(expected, true)));
+        any += usize::from(item.expected.iter().any(|expected| lattice.reaches(expected, false)));
+    }
+    println!(
+        "oracle: an accepted conversion is a path of the lattice for {known} of {} items, of words of the \
+         dictionary alone ({:.1}%), and for {any} ({:.1}%) with characters of no reading",
+        items.len(),
+        100.0 * count(known) / count(items.len()),
+        100.0 * count(any) / count(items.len())
+    );
+    Ok((label, conversions))
 }
 
 /// Prints the measures of the run and the items it changed, and keeps its
