@@ -20,15 +20,17 @@ pub struct Options {
 }
 
 /// The options of the arguments, of those a command takes: the names in
-/// `valued` take a value, those in `flags` none.
+/// `valued` take a value, those in `repeated` a value each time they are
+/// given, those in `flags` none.
 ///
 /// # Errors
 ///
-/// An option the command does not take, given twice, or without its value, or
-/// an argument that is not an option.
+/// An option the command does not take, given twice but for those in
+/// `repeated`, or without its value, or an argument that is not an option.
 pub fn parse(
     arguments: impl IntoIterator<Item = OsString>,
     valued: &[&str],
+    repeated: &[&str],
     flags: &[&str],
 ) -> Result<Options, String> {
     let mut options = Options::default();
@@ -42,10 +44,11 @@ pub fn parse(
             Some((name, value)) => (name.to_owned(), Some(OsString::from(value))),
             None => (option.to_owned(), None),
         };
-        if options.values.iter().any(|(given, _)| *given == name) || options.flags.contains(&name) {
+        let repeatable = repeated.contains(&name.as_str());
+        if !repeatable && (options.values.iter().any(|(given, _)| *given == name) || options.flags.contains(&name)) {
             return Err(format!("--{name} given twice"));
         }
-        if valued.contains(&name.as_str()) {
+        if valued.contains(&name.as_str()) || repeatable {
             let value = match inline {
                 Some(value) => value,
                 None => arguments.next().ok_or_else(|| format!("--{name} without its value"))?,
@@ -67,6 +70,15 @@ impl Options {
             .iter()
             .find(|(given, _)| given == name)
             .map(|(_, value)| value)
+    }
+
+    /// The values of an option given as many times as it was, in their order.
+    pub fn values(&self, name: &str) -> Vec<String> {
+        self.values
+            .iter()
+            .filter(|(given, _)| given == name)
+            .map(|(_, value)| value.to_string_lossy().into_owned())
+            .collect()
     }
 
     /// The value of an option as a path.
@@ -110,11 +122,14 @@ mod tests {
     #[test]
     fn options_are_read_in_both_forms() {
         let options = parse(
-            arguments(&["--model", "m", "--threads=4", "--quiet"]),
+            arguments(&["--model", "m", "--threads=4", "--quiet", "--cpu", "p0", "--cpu=e0"]),
             &["model", "threads"],
+            &["cpu"],
             &["quiet"],
         )
         .expect("options");
+        assert_eq!(options.values("cpu"), ["p0", "e0"]);
+        assert_eq!(options.values("model"), ["m"]);
         assert_eq!(options.text("model").as_deref(), Some("m"));
         assert_eq!(options.parsed::<usize>("threads"), Ok(Some(4)));
         assert!(options.flag("quiet"));
@@ -123,12 +138,13 @@ mod tests {
 
     #[test]
     fn what_a_command_does_not_take_is_refused() {
-        assert!(parse(arguments(&["--model"]), &["model"], &[]).is_err());
-        assert!(parse(arguments(&["--other", "x"]), &["model"], &[]).is_err());
-        assert!(parse(arguments(&["--model", "a", "--model", "b"]), &["model"], &[]).is_err());
-        assert!(parse(arguments(&["model"]), &["model"], &[]).is_err());
-        assert!(parse(arguments(&["--quiet=yes"]), &[], &["quiet"]).is_err());
-        let options = parse(arguments(&["--threads", "four"]), &["threads"], &[]).expect("options");
+        assert!(parse(arguments(&["--model"]), &["model"], &[], &[]).is_err());
+        assert!(parse(arguments(&["--other", "x"]), &["model"], &[], &[]).is_err());
+        assert!(parse(arguments(&["--model", "a", "--model", "b"]), &["model"], &[], &[]).is_err());
+        assert!(parse(arguments(&["model"]), &["model"], &[], &[]).is_err());
+        assert!(parse(arguments(&["--quiet=yes"]), &[], &[], &["quiet"]).is_err());
+        assert!(parse(arguments(&["--cpu"]), &[], &["cpu"], &[]).is_err());
+        let options = parse(arguments(&["--threads", "four"]), &["threads"], &[], &[]).expect("options");
         assert!(options.parsed::<usize>("threads").is_err());
     }
 }

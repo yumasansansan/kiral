@@ -68,6 +68,30 @@ pub fn read(bytes: &[u8]) -> Result<Vec<Item>, String> {
         .collect()
 }
 
+/// The items of a file -- the benchmark's own where none is named -- the first
+/// `limit` of them where a limit is given.
+///
+/// # Errors
+///
+/// Where the file cannot be read or holds no items, with how to fetch it.
+pub fn load(path: Option<std::path::PathBuf>, limit: Option<usize>) -> Result<Vec<Item>, String> {
+    let path = path.unwrap_or_else(|| std::path::PathBuf::from(ITEMS));
+    let bytes = std::fs::read(&path).map_err(|error| {
+        format!(
+            "{}: {error} (scripts/fetch_datasets.py fetch ajimee fetches it)",
+            path.display()
+        )
+    })?;
+    let mut items = read(&bytes)?;
+    if let Some(limit) = limit {
+        items.truncate(limit);
+    }
+    if items.is_empty() {
+        return Err(format!("{}: no items", path.display()));
+    }
+    Ok(items)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

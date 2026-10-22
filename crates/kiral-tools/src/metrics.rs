@@ -70,9 +70,30 @@ pub fn mcnemar(better: usize, worse: usize) -> f64 {
     (2.0 * tail).min(1.0)
 }
 
+/// The `p`-th percentile of sorted times, by the nearest rank: the time no
+/// fewer than `p` percent of them are at or below, `ceil(p n / 100)`-th of `n`;
+/// zero for none.
+pub fn percentile(sorted: &[std::time::Duration], p: usize) -> std::time::Duration {
+    if sorted.is_empty() {
+        return std::time::Duration::ZERO;
+    }
+    let rank = (p * sorted.len()).div_ceil(100).clamp(1, sorted.len());
+    sorted[rank - 1]
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn percentiles_are_of_the_nearest_rank() {
+        let times: Vec<std::time::Duration> = (1..=200).map(std::time::Duration::from_millis).collect();
+        assert_eq!(percentile(&times, 50), std::time::Duration::from_millis(100));
+        assert_eq!(percentile(&times, 99), std::time::Duration::from_millis(198));
+        assert_eq!(percentile(&times, 100), std::time::Duration::from_millis(200));
+        assert_eq!(percentile(&times[..1], 99), std::time::Duration::from_millis(1));
+        assert_eq!(percentile(&[], 50), std::time::Duration::ZERO);
+    }
 
     #[test]
     fn distances_are_those_of_ajimees_tests() {

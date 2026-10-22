@@ -32,6 +32,13 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
   200 項目の変換は，KIRAL のコードとは別に NumPy で倍精度で書いた同じネットワークの変換とすべて一致します．
 
+- Mozc は，使われるとおりに測ります．`kiral-tools eval --mozc` は，実行のためだけの Mozc（実行ごとに作って後で消すプロファイル．利用者自身の Mozc には何も学習させません）に，`mozc_emacs_helper` を通して読みをローマ字で 1 キーずつ打ち込み，打ったものが読みと一致することを確かめてから Space で変換し，取り消します．Mozc 2.29 は Acc@1 47.5，CER 7.91（左文脈あり 43.0 / 10.29．Mozc は左文脈を受け取りません．左文脈なし 52.0 / 5.54）です．`kiral-tools replay --mozc --cpu p0 --cpu e0` は，実行を P コアに，次に E コアに固定し（`kiral-sys`，`kiral-cpu`），クロックを読みながら，各キーと各変換の時間を測ります．i7-1360P での，Mozc の IPC を通した応答の時間：
+
+  | Mozc 2.29 | キー p50 | p99 | 変換 p50 | p99 |
+  | --- | ---: | ---: | ---: | ---: |
+  | P コア（CPU 0，クロックの中央値 4.76 GHz） | 0.83 ms | 3.79 ms | 1.36 ms | 7.64 ms |
+  | E コア（CPU 8，クロックの中央値 3.70 GHz） | 1.25 ms | 5.71 ms | 2.14 ms | 11.11 ms |
+
 - 単精度のカーネル（`kiral-kernels`）：パネルにパックした重みによる線形層，LayerNorm，GELU，softmax，キャッシュに対する attention を，コンパイラがベクトル化するシンプルな Rust で書いています．どれも倍精度と比べてテストし，誤差を丸めの解析から導いた上界に収めています．長さはベクトルの幅の倍数でないものを使います．
 - 命令セットのレベル（`kiral-cpu`）：std の検出によるレベルと，その中からの選択です．`KIRAL_ISA=<レベル>` と `KIRAL_KERNELS=portable` で選択を抑えられます．
 - 手書きの safetensors と JSON の読み取り（`kiral-model`）：どんなバイト列も受け付け，読めないものはパニックではなくエラーにします．
@@ -62,7 +69,15 @@ python3 scripts/fetch_datasets.py fetch ajimee zenz-v3.1-small
 cargo run --release --locked -p kiral-tools -- eval --model data/zenz-v3.1-small
 ```
 
-このスクリプトは AJIMEE-Bench と zenz-v3.1-small を固定のリビジョンから `data/`（コミットしない）に取得し，`scripts/datasets.sha256` に記録した SHA-256 と照合します．`list` で取得元と利用条件を表示します．各実行の結果は `bench/results/` に保存し，比較の基準となる数値は `bench/baselines.toml` にあります．
+```bash
+cargo run --release --locked -p kiral-tools -- eval --mozc
+```
+
+```bash
+cargo run --release --locked -p kiral-tools -- replay --mozc --cpu p0 --cpu e0
+```
+
+このスクリプトは AJIMEE-Bench と zenz-v3.1-small を固定のリビジョンから `data/`（コミットしない）に取得し，`scripts/datasets.sha256` に記録した SHA-256 と照合します．`list` で取得元と利用条件を表示します．各実行の結果は `bench/results/` に保存し，比較の基準となる数値は `bench/baselines.toml` にあります．Mozc の計測は Linux で，ヘルパーのためにパッケージ `emacs-mozc-bin` を入れて行います．
 
 ## ライセンス
 

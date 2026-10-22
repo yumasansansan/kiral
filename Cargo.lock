@@ -23,10 +23,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "kiral-sys"
+version = "0.1.0"
+
+[[package]]
 name = "kiral-tools"
 version = "0.1.0"
 dependencies = [
  "kiral-cpu",
  "kiral-model",
  "kiral-nn",
+ "kiral-sys",
 ]

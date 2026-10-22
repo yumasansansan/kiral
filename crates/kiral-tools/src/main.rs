@@ -10,13 +10,19 @@
 //!
 //! - `eval`: the accuracy of a conversion against AJIMEE-Bench, and the items
 //!   it changed since the run before.
+//! - `replay`: the time an input method takes for each key, typed as a user
+//!   types, on the processors asked for.
 #![forbid(unsafe_code)]
 
 mod ajimee;
 mod arguments;
 mod eval;
 mod metrics;
+mod mozc;
+mod replay;
 mod results;
+mod romaji;
+mod sexp;
 
 use std::process::ExitCode;
 
@@ -24,13 +30,15 @@ const USAGE: &str = "\
 usage: kiral-tools <command> [options]
 
 commands:
-  eval    the accuracy of a conversion against AJIMEE-Bench (kiral-tools eval --help)";
+  eval    the accuracy of a conversion against AJIMEE-Bench (kiral-tools eval --help)
+  replay  the time of each key typed into an input method (kiral-tools replay --help)";
 
 fn main() -> ExitCode {
     let mut arguments = std::env::args_os().skip(1);
     let command = arguments.next().map(|command| command.to_string_lossy().into_owned());
     match command.as_deref() {
         Some("eval") => eval::main(arguments),
+        Some("replay") => replay::main(arguments),
         Some("help" | "--help" | "-h") => {
             println!("{USAGE}");
             ExitCode::SUCCESS

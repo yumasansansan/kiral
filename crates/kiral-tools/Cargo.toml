@@ -8,7 +8,7 @@
 
 [package]
 name = "kiral-tools"
-description = "KIRAL's command line: the measurements of accuracy against AJIMEE-Bench"
+description = "KIRAL's command line: the measurements of accuracy against AJIMEE-Bench, and of the time of each key"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -24,6 +24,7 @@ path = "src/main.rs"
 kiral-cpu = { path = "../kiral-cpu" }
 kiral-model = { path = "../kiral-model" }
 kiral-nn = { path = "../kiral-nn" }
+kiral-sys = { path = "../kiral-sys" }
 
 [lints]
 workspace = true

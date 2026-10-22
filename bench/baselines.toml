@@ -12,6 +12,11 @@
 # measures them, and keeps each run's conversions in bench/results/, which is
 # not committed, for the next run to be compared with item by item.
 #
+# `replay` keeps the time an input method takes for each key of AJIMEE-Bench's
+# readings typed in romaji, and for each conversion with Space, in milliseconds:
+# the median and the 99th percentile, by the nearest rank, on one pinned core,
+# with the median of the clock read while it ran.
+#
 # The rows of `kiral-tools eval` are measured by the same harness as KIRAL's
 # own conversions will be. The rows of `earlier` were measured in October 2026,
 # before this repository, by a harness of their own: their accuracies agree with
@@ -25,6 +30,14 @@ accuracy = 87.0
 cer = 1.58
 with_context = { accuracy = 83.0, cer = 2.47 }
 without_context = { accuracy = 91.0, cer = 0.69 }
+
+[[ajimee]]
+system = "Mozc 2.29.5160.102 (Ubuntu 26.10): typed in romaji, converted with Space, no context"
+source = "kiral-tools eval --mozc, 2026-10-23"
+accuracy = 47.5
+cer = 7.91
+with_context = { accuracy = 43.0, cer = 10.29 }
+without_context = { accuracy = 52.0, cer = 5.54 }
 
 [[ajimee]]
 system = "Mozc 2.28 with its OSS dictionary (Ubuntu 24.04), no context"
@@ -79,3 +92,24 @@ system = "zenz-v3.2-small alone: llama.cpp's Q5_K_M, greedy, stopped at any of U
 source = "earlier"
 accuracy = 85.5
 cer = 1.77
+
+[[replay]]
+system = "Mozc 2.29.5160.102 through mozc_emacs_helper, its IPC included"
+source = "kiral-tools replay --mozc, 2026-10-23"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "P, CPU 0, pinned, 4.76 GHz at the median"
+keys = { count = 10151, p50 = 0.834, p99 = 3.790 }
+conversions = { count = 200, p50 = 1.362, p99 = 7.635 }
+
+[[replay]]
+system = "Mozc 2.29.5160.102 through mozc_emacs_helper, its IPC included"
+source = "kiral-tools replay --mozc, 2026-10-23"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "E, CPU 8, pinned, 3.70 GHz at the median"
+keys = { count = 10151, p50 = 1.246, p99 = 5.706 }
+conversions = { count = 200, p50 = 2.144, p99 = 11.108 }
+
+[[replay]]
+system = "Mozc 2.28 (Ubuntu 24.04), conversions only, its IPC included"
+source = "earlier"
+conversions = { p50 = 2.1 }

@@ -35,6 +35,13 @@ So far, the harness that every later step is measured on:
 
   Every one of the 200 conversions is the same as that of the network written in double precision with NumPy, apart from KIRAL's code.
 
+- Mozc, measured as it is used: `kiral-tools eval --mozc` types each reading in romaji into a Mozc of the run's own -- a profile made for the run and removed after, so that the user's own Mozc learns nothing -- a key at a time through `mozc_emacs_helper`, converts it with Space and cancels it, checking that what was typed is the reading. Mozc 2.29 has Acc@1 47.5 and CER 7.91 (43.0 / 10.29 with left context, which it does not take, 52.0 / 5.54 without). `kiral-tools replay --mozc --cpu p0 --cpu e0` times each key and each conversion, the run pinned to a performance core and then to an efficiency core (`kiral-sys`, `kiral-cpu`), with the clock read beside; on an i7-1360P, the times of answers through Mozc's IPC:
+
+  | Mozc 2.29 | Keys, p50 | p99 | Conversions, p50 | p99 |
+  | --- | ---: | ---: | ---: | ---: |
+  | P-core (CPU 0, 4.76 GHz at the median) | 0.83 ms | 3.79 ms | 1.36 ms | 7.64 ms |
+  | E-core (CPU 8, 3.70 GHz at the median) | 1.25 ms | 5.71 ms | 2.14 ms | 11.11 ms |
+
 - The kernels in single precision (`kiral-kernels`): linear layers on weights packed in panels, layer normalization, GELU, softmax and attention over the cache, in plain Rust that the compiler turns into vector code. Each is tested against double precision, its error held to the bound that the analysis of its roundings gives, at lengths that are not multiples of the vectors' width.
 - The levels of the instruction set (`kiral-cpu`), as std's detection finds them, and the choice among them that `KIRAL_ISA=<level>` and `KIRAL_KERNELS=portable` hold back.
 - safetensors and JSON read by hand (`kiral-model`), taking any bytes: what is not a file of theirs is an error, never a panic.
@@ -65,7 +72,15 @@ python3 scripts/fetch_datasets.py fetch ajimee zenz-v3.1-small
 cargo run --release --locked -p kiral-tools -- eval --model data/zenz-v3.1-small
 ```
 
-The script fetches AJIMEE-Bench and zenz-v3.1-small from fixed revisions into `data/`, which is not committed, and checks them against the SHA-256 that `scripts/datasets.sha256` records; `list` shows where each comes from and its terms. The results of each run go to `bench/results/`, and `bench/baselines.toml` keeps the numbers that runs are compared with.
+```bash
+cargo run --release --locked -p kiral-tools -- eval --mozc
+```
+
+```bash
+cargo run --release --locked -p kiral-tools -- replay --mozc --cpu p0 --cpu e0
+```
+
+The script fetches AJIMEE-Bench and zenz-v3.1-small from fixed revisions into `data/`, which is not committed, and checks them against the SHA-256 that `scripts/datasets.sha256` records; `list` shows where each comes from and its terms. The results of each run go to `bench/results/`, and `bench/baselines.toml` keeps the numbers that runs are compared with. Mozc is measured on Linux, with the package `emacs-mozc-bin` for its helper.
 
 ## License
 

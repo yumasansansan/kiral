@@ -21,9 +21,14 @@
 //! The extensions are those std's `is_x86_feature_detected!` and
 //! `is_aarch64_feature_detected!` report, which ask the processor and the system:
 //! AVX-512 counts only where the system saves its registers.
+//!
+//! [`topology`] tells the performance cores from the efficiency cores, and reads
+//! the clock and the processor's name, for measurements to say what they ran on.
 #![forbid(unsafe_code)]
 
 use std::fmt;
+
+pub mod topology;
 
 /// A set of extensions of the instruction set that a form of the kernels is
 /// written for, named as `KIRAL_ISA` names it.
