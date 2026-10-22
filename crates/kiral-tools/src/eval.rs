@@ -30,7 +30,9 @@ use std::time::Instant;
 
 use kiral_cpu::{Choice, Features, Request};
 use kiral_dict::Dictionary;
+use kiral_kernels::quantized::{Rotation, Scheme};
 use kiral_lattice::Lattice;
+use kiral_nn::gpt2::Precision;
 use kiral_nn::zenz::{Converter, Stop, Zenz, prompt};
 
 use crate::ajimee::{self, Item};
@@ -42,13 +44,21 @@ const USAGE: &str = "\
 usage: kiral-tools eval (--model <directory> | --dict <file> | --mozc) [options]
 
 The accuracy of a conversion against AJIMEE-Bench (JWTD_v2/v1): zenz alone
-(zenz-v3's prompt, greedy decoding in single precision, no dictionary), a
-dictionary alone (each reading's best path by Viterbi, no left context), or
-Mozc (the reading typed in romaji, converted with Space, no left context).
+(zenz-v3's prompt, greedy decoding, no dictionary), a dictionary alone (each
+reading's best path by Viterbi, no left context), or Mozc (the reading typed in
+romaji, converted with Space, no left context).
 
   --model <directory>   zenz as Hugging Face publishes it: config.json,
                         model.safetensors, vocab.json, merges.txt and
                         special_tokens_map.json (a file in it names it too)
+  --int8                zenz's products in integers: its weights quantized to
+                        bytes when it is read, a scale for each output's group
+                        of 64 inputs [single precision]
+  --weight-bits <n>     the bits of a weight's integer, 2 to 8 [8]
+  --rotate <order>      each block of this many inputs, a power of four,
+                        rotated first by a regular Hadamard matrix [none]
+  --fitted              each group of weights at the scale of least squared
+                        error, not that of its greatest magnitude
   --dict <file>         a dictionary file, which kiral-tools dict build makes;
                         the run says its oracle too
   --mozc                Mozc, through mozc_emacs_helper, with a profile of the
@@ -60,7 +70,8 @@ Mozc (the reading typed in romaji, converted with Space, no left context).
   --limit <n>           the first n items only
   --threads <n>         the threads zenz's items are shared among [all]
   --label <name>        the name the results are kept and compared under
-                        [the model's directory's name, dict-<name>, or
+                        [the model's directory's name, with -int8 and the
+                        scheme's other choices for --int8, dict-<name>, or
                         mozc-<version>]
   --against <file>      the results to compare with [the label's last]
   --results <directory> where results are kept [bench/results/ajimee]";
@@ -98,9 +109,11 @@ fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<(), String> {
             "label",
             "against",
             "results",
+            "weight-bits",
+            "rotate",
         ],
         &[],
-        &["mozc", "help"],
+        &["mozc", "int8", "fitted", "help"],
     )
     .map_err(|message| format!("{message}\n\n{USAGE}"))?;
     if options.flag("help") {
@@ -115,6 +128,9 @@ fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<(), String> {
         usize::from(model.is_some()) + usize::from(options.flag("mozc")) + usize::from(options.value("dict").is_some());
     if systems != 1 {
         return Err(format!("one of --model, --dict and --mozc\n\n{USAGE}"));
+    }
+    if scheme_of(&options)?.is_some() && model.is_none() {
+        return Err(format!("--int8 and its scheme are for --model\n\n{USAGE}"));
     }
     let items = ajimee::load(options.path("items"), options.parsed::<usize>("limit")?)?;
     let kept = options
@@ -147,15 +163,21 @@ fn with_zenz(options: &arguments::Options, model: &Path, items: &[Item]) -> Resu
         None => std::thread::available_parallelism().map_or(1, usize::from),
     }
     .min(items.len());
+    let precision = scheme_of(options)?.map_or(Precision::Single, Precision::Integers);
     let label = options.text("label").unwrap_or_else(|| {
-        directory
+        let name = directory
             .file_name()
-            .map_or_else(|| "zenz".to_owned(), |name| name.to_string_lossy().into_owned())
+            .map_or_else(|| "zenz".to_owned(), |name| name.to_string_lossy().into_owned());
+        match precision {
+            Precision::Single => name,
+            Precision::Integers(scheme) => format!("{name}-{}", scheme_label(&scheme)),
+        }
     });
-    let zenz = Zenz::load(&directory).map_err(|error| format!("{}: {error}", directory.display()))?;
+    let zenz = Zenz::load(&directory, precision).map_err(|error| format!("{}: {error}", directory.display()))?;
     println!(
-        "AJIMEE-Bench JWTD_v2/v1, {} items: {label}, zenz alone (zenz-v3's prompt, greedy, single precision)",
-        items.len()
+        "AJIMEE-Bench JWTD_v2/v1, {} items: {label}, zenz alone (zenz-v3's prompt, greedy, {})",
+        items.len(),
+        precision_name(precision)
     );
     println!("{}; {threads} threads, kernels in {}", machine(), kernels());
     Ok((label, convert_with_zenz(&zenz, items, threads)?))
@@ -293,6 +315,75 @@ fn machine() -> String {
     format!("{processor}, levels {levels}")
 }
 
+/// The scheme of quantization the options ask for, `--int8` and the choices
+/// that go with it; none for single precision.
+///
+/// # Errors
+///
+/// Where a choice is out of its range.
+pub fn scheme_of(options: &arguments::Options) -> Result<Option<Scheme>, String> {
+    let bits = options.parsed::<u32>("weight-bits")?;
+    let order = options.parsed::<usize>("rotate")?;
+    let fitted = options.flag("fitted");
+    if !options.flag("int8") && bits.is_none() && order.is_none() && !fitted {
+        return Ok(None);
+    }
+    let weight_bits = bits.unwrap_or(8);
+    if !(2..=8).contains(&weight_bits) {
+        return Err(format!("--weight-bits {weight_bits}: from 2 to 8"));
+    }
+    let rotation = match order {
+        None | Some(1) => Rotation::None,
+        Some(order) if order.is_power_of_two() && order.trailing_zeros().is_multiple_of(2) => Rotation::Hadamard(order),
+        Some(order) => return Err(format!("--rotate {order}: not a power of four")),
+    };
+    Ok(Some(Scheme {
+        weight_bits,
+        rotation,
+        fitted,
+    }))
+}
+
+/// A scheme's name in a label: `int8`, and what it chooses otherwise than
+/// [`Scheme::INT8`].
+pub fn scheme_label(scheme: &Scheme) -> String {
+    let bits = (scheme.weight_bits != 8).then(|| format!("-w{}", scheme.weight_bits));
+    let rotation = match scheme.rotation {
+        Rotation::None => None,
+        Rotation::Hadamard(order) => Some(format!("-h{order}")),
+    };
+    let fitted = scheme.fitted.then_some("-fit");
+    format!(
+        "int8{}{}{}",
+        bits.unwrap_or_default(),
+        rotation.unwrap_or_default(),
+        fitted.unwrap_or_default()
+    )
+}
+
+/// What a precision computes, for the log.
+pub fn precision_name(precision: Precision) -> String {
+    match precision {
+        Precision::Single => "single precision".to_owned(),
+        Precision::Integers(scheme) => format!(
+            "products in integers: weights of {} bits{}{}, a scale for each output's group of 64 inputs{}, inputs \
+             in bytes with a zero point for each token's group",
+            scheme.weight_bits,
+            if scheme.weight_bits == 8 {
+                ""
+            } else {
+                " (the output layer's of 8)"
+            },
+            match scheme.rotation {
+                Rotation::None => String::new(),
+                Rotation::Hadamard(order) =>
+                    format!(", both rotated in blocks of {order} by a regular Hadamard matrix"),
+            },
+            if scheme.fitted { " of least squared error" } else { "" }
+        ),
+    }
+}
+
 /// The form of the kernels taken, for the log.
 fn kernels() -> String {
     match Request::from_environment().map(|request| Choice::new(Features::detect(), request)) {
@@ -303,7 +394,7 @@ fn kernels() -> String {
 
 /// The most tokens a conversion of an item may take: three for each character
 /// of its reading, as no character of a conversion takes more, and some over.
-fn limit(item: &Item) -> usize {
+pub fn limit(item: &Item) -> usize {
     3 * item.reading.chars().count() + 8
 }
 

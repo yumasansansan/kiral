@@ -25,7 +25,7 @@ English | [日本語](README.ja.md)
 So far, the harness that every later step is measured on:
 
 - `kiral-tools eval` converts AJIMEE-Bench's 200 readings, gives Acc@1 and the character error rate (CER) of them all and of those with and without left context, compares the run item by item with the last one, with McNemar's exact p, and keeps its conversions for the next.
-- [zenz](https://huggingface.co/Miwa-Keita/zenz-v3.1-small), the GPT-2 of [Zenzai](https://github.com/azooKey/AzooKeyKanaKanjiConverter) for kana-kanji conversion, computed by KIRAL's own code (`kiral-nn`): its tokenizer, GPT-2's byte-level BPE; the network in single precision with a cache of keys and values; greedy decoding after zenz-v3's prompt. zenz-v3.1-small alone, with no dictionary:
+- [zenz](https://huggingface.co/Miwa-Keita/zenz-v3.1-small), the GPT-2 of [Zenzai](https://github.com/azooKey/AzooKeyKanaKanjiConverter) for kana-kanji conversion, computed by KIRAL's own code (`kiral-nn`): its tokenizer, GPT-2's byte-level BPE; the network in single precision and in integers, with a cache of keys and values; greedy decoding after zenz-v3's prompt. zenz-v3.1-small alone, with no dictionary:
 
   | | Items | Acc@1 | CER |
   | --- | ---: | ---: | ---: |
@@ -34,6 +34,33 @@ So far, the harness that every later step is measured on:
   | Without | 100 | 91.0 | 0.69 |
 
   Every one of the 200 conversions is the same as that of the network written in double precision with NumPy, apart from KIRAL's code.
+
+  In integers (`--int8`): the weights of the linear layers and of the output layer quantized to bytes as the model is read, a scale for each output's group of 64 inputs, and their inputs quantized as they come, a scale and a zero point for each token's group (`kiral_kernels::quantized`, in the layout of stable-diffusion.assembly's `bits=8`), the products of a group summed exactly in 32 bits: Acc@1 87.0 and CER 1.58, the same items right as in single precision, one conversion of the 200 changed and wrong either way. `kiral-tools agree` feeds each item's prompt and single precision's conversion of it to both and compares the likeliest next token at each position of the conversion, what checking a draft depends on: 4395 of the 4396 positions agree.
+
+  Fewer bits take more care. A scheme may rotate each block of a layer's inputs, as ConvRot does for the diffusion transformers, by a regular Hadamard matrix -- each of its rows and columns sums to the square root of its order, so that a row's large numbers spread rather than add up -- the weights when they are packed and the inputs online; fit each group's scale to its least squared error; and the output layer keeps eight bits. The positions of the conversions that agree with single precision, of 4396:
+
+  | Weights | Agree | Acc@1 | CER |
+  | --- | ---: | ---: | ---: |
+  | 8 bits | 4395 (99.98%) | 87.0 | 1.58 |
+  | 8 bits, rotated in blocks of 256 | 4395 (99.98%) | 86.5 | 1.67 |
+  | 4 bits | 4366 (99.32%) | 80.5 | 2.56 |
+  | 4 bits, scales fitted | 4362 (99.23%) | | |
+  | 4 bits, rotated in blocks of 64, scales fitted | 4367 (99.34%) | | |
+  | 4 bits, rotated in blocks of 256 | 4378 (99.59%) | 82.0 | 2.07 |
+  | 4 bits, rotated in blocks of 256, scales fitted | 4376 (99.55%) | 83.0 | 2.02 |
+
+  Eight bits lose nothing and need no rotation: they are what `--int8` takes. At four bits the rotation takes the positions that agree to 99.6% and Acc@1 back from 80.5 to 82.0 (83.0 with the scales fitted, which add nothing to the positions), but not to single precision's 87.0: an item's conversion has some 22 positions and changes with any of them, and half the items that change are lost, so that Acc@1 within a point asks for some 99.9% of them, which only eight bits give. Four bits wait for a quantization calibrated on data.
+
+  Timed with `kiral-tools bench model`, 50 items converted one after another on a pinned core, each prompt fed at once and each step of decoding after it, on the i7-1360P:
+
+  | Two runs each | Prompts (37 tokens), p50 | p99 | Steps, p50 | p99 |
+  | --- | ---: | ---: | ---: | ---: |
+  | Single precision, P-core (CPU 0, 4.3–4.4 GHz) | 175–176 ms | 474–492 ms | 15.9–16.2 ms | 20.0–20.5 ms |
+  | Integers, P-core | 351–368 ms | 1020–1042 ms | 13.5–14.3 ms | 17.1–17.7 ms |
+  | Single precision, E-core (CPU 8, 3.70 GHz) | 246–254 ms | 688–700 ms | 20.9–21.1 ms | 26.5–27.2 ms |
+  | Integers, E-core | 486–488 ms | 1399–1402 ms | 21.3–23.2 ms | 24.2–25.4 ms |
+
+  In plain Rust the products in integers take twice as long as those in single precision over a prompt, and about as long over a step of decoding, which reads every weight, 340 MB in single precision and a quarter of that in bytes: the forms in assembly, AVX-VNNI's `vpdpbusd` first, come next, with these as their measure.
 
 - Mozc, measured as it is used: `kiral-tools eval --mozc` types each reading in romaji into a Mozc of the run's own -- a profile made for the run and removed after, so that the user's own Mozc learns nothing -- a key at a time through `mozc_emacs_helper`, converts it with Space and cancels it, checking that what was typed is the reading. Mozc 2.29 has Acc@1 47.5 and CER 7.91 (43.0 / 10.29 with left context, which it does not take, 52.0 / 5.54 without). `kiral-tools replay --mozc --cpu p0 --cpu e0` times each key and each conversion, the run pinned to a performance core and then to an efficiency core (`kiral-sys`, `kiral-cpu`), with the clock read beside; on an i7-1360P, the times of answers through Mozc's IPC:
 
@@ -85,6 +112,18 @@ python3 scripts/fetch_datasets.py fetch ajimee zenz-v3.1-small
 
 ```bash
 cargo run --release --locked -p kiral-tools -- eval --model data/zenz-v3.1-small
+```
+
+```bash
+cargo run --release --locked -p kiral-tools -- eval --model data/zenz-v3.1-small --int8
+```
+
+```bash
+cargo run --release --locked -p kiral-tools -- agree --model data/zenz-v3.1-small --weight-bits 4 --rotate 256
+```
+
+```bash
+cargo run --release --locked -p kiral-tools -- bench model --model data/zenz-v3.1-small --int8 --cpu p0 --cpu e0
 ```
 
 ```bash

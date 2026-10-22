@@ -43,6 +43,7 @@ version = "0.1.0"
 dependencies = [
  "kiral-cpu",
  "kiral-dict",
+ "kiral-kernels",
  "kiral-lattice",
  "kiral-model",
  "kiral-nn",

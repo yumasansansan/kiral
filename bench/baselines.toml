@@ -17,6 +17,12 @@
 # the median and the 99th percentile, by the nearest rank, on one pinned core,
 # with the median of the clock read while it ran.
 #
+# `agree` keeps how many of the positions of single precision's conversions of
+# AJIMEE-Bench's items have, in a quantized model, the likeliest next token that
+# single precision has there (`kiral-tools agree`), and `model` the time zenz
+# takes for a prompt fed at once and for each step of decoding, in
+# milliseconds, as `replay` gives them (`kiral-tools bench model`).
+#
 # The rows of `kiral-tools eval` are measured by the same harness as KIRAL's
 # own conversions will be. The rows of `earlier` were measured in October 2026,
 # before this repository, by a harness of their own: their accuracies agree with
@@ -30,6 +36,46 @@ accuracy = 87.0
 cer = 1.58
 with_context = { accuracy = 83.0, cer = 2.47 }
 without_context = { accuracy = 91.0, cer = 0.69 }
+
+[[ajimee]]
+system = "zenz-v3.1-small alone in integers (--int8): weights of 8 bits, a scale for each output's group of 64 inputs, inputs of 8 bits with a zero point for each token's group"
+source = "kiral-tools eval --int8, 2026-10-23"
+accuracy = 87.0
+cer = 1.58
+with_context = { accuracy = 83.0, cer = 2.47 }
+without_context = { accuracy = 91.0, cer = 0.69 }
+
+[[ajimee]]
+system = "zenz-v3.1-small alone in integers, weights of 8 bits rotated in blocks of 256 by regular Hadamard matrices (--int8 --rotate 256)"
+source = "kiral-tools eval, 2026-10-23"
+accuracy = 86.5
+cer = 1.67
+with_context = { accuracy = 83.0, cer = 2.47 }
+without_context = { accuracy = 90.0, cer = 0.88 }
+
+[[ajimee]]
+system = "zenz-v3.1-small alone in integers, weights of 4 bits, the output layer's of 8 (--weight-bits 4)"
+source = "kiral-tools eval, 2026-10-23"
+accuracy = 80.5
+cer = 2.56
+with_context = { accuracy = 77.0, cer = 3.42 }
+without_context = { accuracy = 84.0, cer = 1.69 }
+
+[[ajimee]]
+system = "zenz-v3.1-small alone in integers, weights of 4 bits rotated in blocks of 256, the output layer's of 8 (--weight-bits 4 --rotate 256)"
+source = "kiral-tools eval, 2026-10-23"
+accuracy = 82.0
+cer = 2.07
+with_context = { accuracy = 79.0, cer = 2.85 }
+without_context = { accuracy = 85.0, cer = 1.29 }
+
+[[ajimee]]
+system = "zenz-v3.1-small alone in integers, weights of 4 bits rotated in blocks of 256, scales fitted, the output layer's of 8 (--weight-bits 4 --rotate 256 --fitted)"
+source = "kiral-tools eval, 2026-10-23"
+accuracy = 83.0
+cer = 2.02
+with_context = { accuracy = 80.0, cer = 2.74 }
+without_context = { accuracy = 86.0, cer = 1.29 }
 
 [[ajimee]]
 system = "KIRAL's dictionary alone, built from Mozc's open-source dictionary (f183d4d3): Viterbi, no context"
@@ -172,3 +218,77 @@ conversions = { count = 200, p50 = 0.071, p99 = 0.358 }
 system = "Mozc 2.28 (Ubuntu 24.04), conversions only, its IPC included"
 source = "earlier"
 conversions = { p50 = 2.1 }
+
+[[agree]]
+system = "zenz-v3.1-small, weights of 8 bits (--int8)"
+source = "kiral-tools agree, 2026-10-23"
+conversion_positions = { agree = 4395, of = 4396 }
+every_position = { agree = 12606, of = 12747 }
+
+[[agree]]
+system = "zenz-v3.1-small, weights of 8 bits, rotated in blocks of 256 (--int8 --rotate 256)"
+source = "kiral-tools agree, 2026-10-23"
+conversion_positions = { agree = 4395, of = 4396 }
+every_position = { agree = 12653, of = 12747 }
+
+[[agree]]
+system = "zenz-v3.1-small, weights of 4 bits, the output layer's of 8 (--weight-bits 4)"
+source = "kiral-tools agree, 2026-10-23"
+conversion_positions = { agree = 4366, of = 4396 }
+every_position = { agree = 11749, of = 12747 }
+
+[[agree]]
+system = "zenz-v3.1-small, weights of 4 bits, scales fitted (--weight-bits 4 --fitted)"
+source = "kiral-tools agree, 2026-10-23"
+conversion_positions = { agree = 4362, of = 4396 }
+every_position = { agree = 11655, of = 12747 }
+
+[[agree]]
+system = "zenz-v3.1-small, weights of 4 bits, rotated in blocks of 64, scales fitted (--weight-bits 4 --rotate 64 --fitted)"
+source = "kiral-tools agree, 2026-10-23"
+conversion_positions = { agree = 4367, of = 4396 }
+every_position = { agree = 11800, of = 12747 }
+
+[[agree]]
+system = "zenz-v3.1-small, weights of 4 bits, rotated in blocks of 256 (--weight-bits 4 --rotate 256)"
+source = "kiral-tools agree, 2026-10-23"
+conversion_positions = { agree = 4378, of = 4396 }
+every_position = { agree = 11757, of = 12747 }
+
+[[agree]]
+system = "zenz-v3.1-small, weights of 4 bits, rotated in blocks of 256, scales fitted (--weight-bits 4 --rotate 256 --fitted)"
+source = "kiral-tools agree, 2026-10-23"
+conversion_positions = { agree = 4376, of = 4396 }
+every_position = { agree = 11814, of = 12747 }
+
+[[model]]
+system = "zenz-v3.1-small alone, single precision"
+source = "kiral-tools bench model --limit 50, 2026-10-23, two runs"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "P, CPU 0, pinned, 4.30 and 4.40 GHz at the median"
+prompts = { count = 50, tokens_p50 = 37, p50 = [174.557, 175.749], p99 = [492.101, 474.144] }
+steps = { count = 1051, p50 = [16.219, 15.885], p99 = [20.479, 19.975] }
+
+[[model]]
+system = "zenz-v3.1-small alone, single precision"
+source = "kiral-tools bench model --limit 50, 2026-10-23, two runs"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "E, CPU 8, pinned, 3.70 GHz at the median"
+prompts = { count = 50, tokens_p50 = 37, p50 = [245.77, 253.907], p99 = [688.142, 699.963] }
+steps = { count = 1051, p50 = [20.905, 21.077], p99 = [26.486, 27.179] }
+
+[[model]]
+system = "zenz-v3.1-small alone in integers (--int8), the portable form"
+source = "kiral-tools bench model --limit 50, 2026-10-23, two runs"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "P, CPU 0, pinned, 4.34 and 4.40 GHz at the median"
+prompts = { count = 50, tokens_p50 = 37, p50 = [367.998, 351.416], p99 = [1041.522, 1020.034] }
+steps = { count = 1051, p50 = [13.531, 14.312], p99 = [17.652, 17.115] }
+
+[[model]]
+system = "zenz-v3.1-small alone in integers (--int8), the portable form"
+source = "kiral-tools bench model --limit 50, 2026-10-23, two runs"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "E, CPU 8, pinned, 3.70 GHz at the median"
+prompts = { count = 50, tokens_p50 = 37, p50 = [488.053, 486.154], p99 = [1401.636, 1399.394] }
+steps = { count = 1051, p50 = [21.298, 23.248], p99 = [24.193, 25.351] }

@@ -6,9 +6,8 @@
 // General Public License, version 3 or any later version
 // (LICENSES/GPL-3.0-or-later.txt).
 
-//! GPT-2 in single precision, as Hugging Face's `GPT2LMHeadModel` computes it:
-//! zenz's network, and the reference that its quantized forms are measured
-//! against.
+//! GPT-2, as Hugging Face's `GPT2LMHeadModel` computes it: zenz's network, in
+//! single precision, the reference, and with its products in integers.
 //!
 //! Each block normalizes the residual stream, attends with the heads over the
 //! cache of keys and values -- each position to itself and those before it --
@@ -17,11 +16,19 @@
 //! normalized stream's dot products with the token embedding, which the output
 //! layer shares. The linear layers' weights are packed for the kernel that
 //! computes them when they are read.
+//!
+//! In integers ([`Precision::Integers`]), the linear layers and the output
+//! layer take their weights quantized to bytes, a scale for each output's group
+//! of 64 inputs, and their inputs quantized as they come, a scale and a zero
+//! point for each row's group, by a scheme that may rotate them first
+//! ([`kiral_kernels::quantized`]); the embeddings, the normalizations, GELU,
+//! attention and its cache, and the residual stream stay in single precision.
 
 use kiral_kernels::activation::gelu_tanh;
 use kiral_kernels::attention::attention;
 use kiral_kernels::linear::{Packed, linear};
 use kiral_kernels::norm::layer_norm;
+use kiral_kernels::quantized::{self, Rows, Scheme};
 use kiral_kernels::vector::{add, logits};
 use kiral_model::json::{Object, Value};
 use kiral_model::safetensors::SafeTensors;
@@ -125,16 +132,43 @@ impl Norm {
     }
 }
 
-/// A linear layer: its weights, packed, and its bias.
+/// What the products of a model's linear layers and output layer are computed
+/// in.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum Precision {
+    /// Single precision: the reference.
+    Single,
+    /// Integers: the weights quantized to signed bytes, the inputs to unsigned
+    /// bytes with a zero point, each in groups of 64 with a scale of their own,
+    /// by a scheme.
+    Integers(Scheme),
+}
+
+/// A linear layer's weights, packed for the kernel of its precision.
+#[derive(Debug, Clone)]
+enum Weights {
+    Single(Packed),
+    Int8(quantized::Packed),
+}
+
+/// A linear layer: its weights and its bias.
 #[derive(Debug, Clone)]
 struct Linear {
-    weight: Packed,
+    weight: Weights,
     bias: Vec<f32>,
 }
 
 impl Linear {
-    fn apply(&self, input: &[f32], output: &mut [f32]) {
-        linear(input, &self.weight, &self.bias, output);
+    /// `output = input weight + bias`, `rows` the room the input is quantized
+    /// in, for weights in integers.
+    fn apply(&self, input: &[f32], rows: &mut Rows, output: &mut [f32]) {
+        match &self.weight {
+            Weights::Single(weight) => linear(input, weight, &self.bias, output),
+            Weights::Int8(weight) => {
+                rows.quantize(input, weight.depth(), weight.scheme().rotation);
+                quantized::linear(rows, weight, &self.bias, output);
+            }
+        }
     }
 }
 
@@ -146,6 +180,7 @@ struct Room {
     found: Vec<f32>,
     expanded: Vec<f32>,
     scores: Vec<f32>,
+    quantized: Rows,
 }
 
 impl Room {
@@ -157,6 +192,7 @@ impl Room {
             found: vec![0.0; rows * width],
             expanded: vec![0.0; rows * 4 * width],
             scores: vec![0.0; positions],
+            quantized: Rows::new(),
         }
     }
 }
@@ -176,26 +212,34 @@ struct Block {
     contraction: Linear,
 }
 
-/// A GPT-2's weights, in single precision.
+/// A GPT-2's weights.
 #[derive(Debug, Clone)]
 pub struct Gpt2 {
     config: Config,
+    precision: Precision,
     token_embedding: Vec<f32>,
     position_embedding: Vec<f32>,
     blocks: Vec<Block>,
     final_norm: Norm,
+    /// The output layer in integers, at eight bits, the token embedding's rows
+    /// its columns; none in single precision, which takes the embedding as it
+    /// is.
+    head: Option<quantized::Packed>,
+    /// The output layer's bias, which GPT-2 has not: zeros.
+    head_bias: Vec<f32>,
 }
 
 impl Gpt2 {
     /// The model of a safetensors file of Hugging Face's names, its weights
-    /// converted to single precision. An output layer of its own (`lm_head`) is
-    /// taken only where it is the token embedding.
+    /// converted to single precision, and the linear layers' and the output
+    /// layer's quantized for [`Precision::Integers`]. An output layer of its
+    /// own (`lm_head`) is taken only where it is the token embedding.
     ///
     /// # Errors
     ///
     /// Where a tensor is missing, of another shape than the configuration's, or
     /// not of floats.
-    pub fn from_safetensors(file: &SafeTensors<'_>, config: Config) -> Result<Self, Error> {
+    pub fn from_safetensors(file: &SafeTensors<'_>, config: Config, precision: Precision) -> Result<Self, Error> {
         let tensor = |name: &str, shape: &[usize]| -> Result<Vec<f32>, Error> {
             let tensor = file
                 .tensor(name)
@@ -218,8 +262,16 @@ impl Gpt2 {
             })
         };
         let linear = |name: &str, inputs: usize, outputs: usize| -> Result<Linear, Error> {
+            let weight = tensor(&format!("{name}.weight"), &[inputs, outputs])?;
             Ok(Linear {
-                weight: Packed::new(&tensor(&format!("{name}.weight"), &[inputs, outputs])?, inputs, outputs),
+                weight: match precision {
+                    Precision::Single => Weights::Single(Packed::new(&weight, inputs, outputs)),
+                    Precision::Integers(scheme) => {
+                        Weights::Int8(quantized::Packed::quantize(inputs, outputs, scheme, |k, j| {
+                            weight[k * outputs + j]
+                        }))
+                    }
+                },
                 bias: tensor(&format!("{name}.bias"), &[outputs])?,
             })
         };
@@ -244,12 +296,32 @@ impl Gpt2 {
                 "an output layer other than the token embedding".to_owned(),
             ));
         }
+        // The output layer's weights stay at eight bits whatever the blocks'
+        // are: its errors move the logits themselves. With the blocks' at four
+        // bits, rotated in blocks of 256 and fitted, the conversions' positions
+        // of AJIMEE-Bench whose likeliest token agrees with single precision's
+        // went from 4372 to 4376 of 4396 with it at eight, for 2.3 MB more.
+        let head = match precision {
+            Precision::Single => None,
+            Precision::Integers(scheme) => {
+                let scheme = Scheme {
+                    weight_bits: 8,
+                    ..scheme
+                };
+                Some(quantized::Packed::quantize(width, config.vocabulary, scheme, |k, v| {
+                    token_embedding[v * width + k]
+                }))
+            }
+        };
         Ok(Self {
             config,
+            precision,
             token_embedding,
             position_embedding: tensor("transformer.wpe.weight", &[config.positions, width])?,
             blocks,
             final_norm: norm("transformer.ln_f")?,
+            head,
+            head_bias: vec![0.0; config.vocabulary],
         })
     }
 
@@ -257,6 +329,12 @@ impl Gpt2 {
     #[must_use]
     pub fn config(&self) -> &Config {
         &self.config
+    }
+
+    /// What its products are computed in.
+    #[must_use]
+    pub fn precision(&self) -> Precision {
+        self.precision
     }
 }
 
@@ -336,6 +414,45 @@ impl<'m> Session<'m> {
     ///
     /// Where `output` is not a logit for each word of the vocabulary.
     pub fn feed(&mut self, tokens: &[u32], output: &mut [f32]) -> Result<(), Error> {
+        let config = self.model.config;
+        assert_eq!(
+            output.len(),
+            config.vocabulary,
+            "logits of another length than the vocabulary"
+        );
+        let (stream, mut room) = self.forward(tokens)?;
+        let last = &stream[(tokens.len() - 1) * config.width..];
+        self.head(last, &mut room, output);
+        Ok(())
+    }
+
+    /// Computes the tokens at the next positions, and writes the logits after
+    /// each of them, a row of the vocabulary's for each token: what checking a
+    /// draft's tokens in one decode needs.
+    ///
+    /// # Errors
+    ///
+    /// Where there are no tokens, a token is out of the vocabulary, or the
+    /// positions would pass the room of the session.
+    ///
+    /// # Panics
+    ///
+    /// Where `output` is not a row of logits for each token.
+    pub fn feed_all(&mut self, tokens: &[u32], output: &mut [f32]) -> Result<(), Error> {
+        assert_eq!(
+            output.len(),
+            tokens.len() * self.model.config.vocabulary,
+            "logits that are not a row of the vocabulary's for each token"
+        );
+        let (stream, mut room) = self.forward(tokens)?;
+        self.head(&stream, &mut room, output);
+        Ok(())
+    }
+
+    /// The residual stream after the blocks, of the tokens at the next
+    /// positions, whose keys and values it caches; and the room it was
+    /// computed in.
+    fn forward(&mut self, tokens: &[u32]) -> Result<(Vec<f32>, Room), Error> {
         let model = self.model;
         let config = model.config;
         let rows = tokens.len();
@@ -349,23 +466,33 @@ impl<'m> Session<'m> {
                 self.capacity
             )));
         }
-        assert_eq!(
-            output.len(),
-            config.vocabulary,
-            "logits of another length than the vocabulary"
-        );
         let mut stream = self.embed(tokens)?;
         let mut room = Room::new(&config, rows, self.length + rows);
         for (layer, block) in model.blocks.iter().enumerate() {
             self.block(layer, block, &mut stream, &mut room);
         }
         self.length += rows;
-        let mut hidden = vec![0.0f32; config.width];
-        model
-            .final_norm
-            .apply(&stream[(rows - 1) * config.width..], config.epsilon, &mut hidden);
-        logits(&hidden, &model.token_embedding, output);
-        Ok(())
+        Ok((stream, room))
+    }
+
+    /// The logits of rows of the stream: each normalized, then its products
+    /// with the token embedding.
+    fn head(&self, stream: &[f32], room: &mut Room, output: &mut [f32]) {
+        let model = self.model;
+        let config = model.config;
+        let mut hidden = vec![0.0f32; stream.len()];
+        model.final_norm.apply(stream, config.epsilon, &mut hidden);
+        if let Some(head) = &model.head {
+            room.quantized.quantize(&hidden, config.width, head.scheme().rotation);
+            quantized::linear(&room.quantized, head, &model.head_bias, output);
+        } else {
+            for (hidden, output) in hidden
+                .chunks_exact(config.width)
+                .zip(output.chunks_exact_mut(config.vocabulary))
+            {
+                logits(hidden, &model.token_embedding, output);
+            }
+        }
     }
 
     /// The residual stream of the tokens at the next positions: their tokens'
@@ -394,15 +521,23 @@ impl<'m> Session<'m> {
     fn block(&mut self, layer: usize, block: &Block, stream: &mut [f32], room: &mut Room) {
         let epsilon = self.model.config.epsilon;
         block.attention_norm.apply(stream, epsilon, &mut room.normalized);
-        block.attention.apply(&room.normalized, &mut room.projected);
+        block
+            .attention
+            .apply(&room.normalized, &mut room.quantized, &mut room.projected);
         self.cache(layer, &room.projected);
         self.attend(layer, &room.projected, &mut room.scores, &mut room.found);
-        block.projection.apply(&room.found, &mut room.normalized);
+        block
+            .projection
+            .apply(&room.found, &mut room.quantized, &mut room.normalized);
         add(stream, &room.normalized);
         block.expansion_norm.apply(stream, epsilon, &mut room.normalized);
-        block.expansion.apply(&room.normalized, &mut room.expanded);
+        block
+            .expansion
+            .apply(&room.normalized, &mut room.quantized, &mut room.expanded);
         gelu_tanh(&mut room.expanded);
-        block.contraction.apply(&room.expanded, &mut room.normalized);
+        block
+            .contraction
+            .apply(&room.expanded, &mut room.quantized, &mut room.normalized);
         add(stream, &room.normalized);
     }
 

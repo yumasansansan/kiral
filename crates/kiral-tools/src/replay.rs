@@ -20,11 +20,10 @@
 //! A run is made on each processor asked for, the thread that types pinned to
 //! it before anything starts, so that Mozc's helper and server, which inherit
 //! the pin, run there too; the clock of the processor is read every 20 ms while
-//! the run goes on, and given with the times.
+//! the run goes on, and given with the times ([`crate::pinned`]).
 
 use std::ffi::OsString;
 use std::process::ExitCode;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use kiral_cpu::topology::{self, Topology};
@@ -34,8 +33,8 @@ use kiral_lattice::Lattice;
 use crate::ajimee::{self, Item};
 use crate::arguments;
 use crate::eval::type_item;
-use crate::metrics::percentile;
 use crate::mozc::{Mozc, Programs};
+use crate::pinned::{place, print_times, processors, run_on};
 
 const USAGE: &str = "\
 usage: kiral-tools replay (--dict <file> | --mozc) [options]
@@ -93,17 +92,7 @@ fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<(), String> {
     }
     let items = ajimee::load(options.path("items"), options.parsed::<usize>("limit")?)?;
     let topology = Topology::detect();
-    let processors = options
-        .values("cpu")
-        .iter()
-        .map(|name| {
-            topology
-                .processor(name)
-                .map(Some)
-                .ok_or_else(|| format!("--cpu {name}: no such processor in {topology:?}"))
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    let processors = if processors.is_empty() { vec![None] } else { processors };
+    let processors = processors(&options, &topology)?;
     let name = topology::processor_name().unwrap_or_else(|| std::env::consts::ARCH.to_owned());
     let bytes = match &dictionary_path {
         Some(path) => std::fs::read(path).map_err(|error| format!("{}: {error}", path.display()))?,
@@ -134,70 +123,15 @@ fn run(arguments: impl IntoIterator<Item = OsString>) -> Result<(), String> {
         );
     }
     for processor in processors {
-        let (times, clock, system) = match &dictionary {
-            Some(dictionary) => replay_on(processor, || Ok(type_with_dictionary(dictionary, &items)))?,
-            None => replay_on(processor, || type_with_mozc(&programs, &items))?,
+        let ((times, system), clock) = match &dictionary {
+            Some(dictionary) => run_on(processor, || Ok(type_with_dictionary(dictionary, &items)))?,
+            None => run_on(processor, || type_with_mozc(&programs, &items))?,
         };
-        let place = match processor {
-            Some(processor) => format!(
-                "CPU {processor} ({}, pinned){}",
-                topology.kind(processor).map_or_else(|| "?".to_owned(), String::from),
-                clock
-            ),
-            None => "unpinned".to_owned(),
-        };
-        println!("  {system}, {place}");
+        println!("  {system}, {}", place(&topology, processor, &clock));
         print_times(if dictionary.is_some() { "kana" } else { "keys" }, &times.keys);
         print_times("conversions (Space)", &times.conversions);
     }
     Ok(())
-}
-
-/// Types on a processor, the typing thread pinned to it first, the clock read
-/// beside: the times, the clock as text, and the name of what was typed into.
-fn replay_on<F>(processor: Option<usize>, typing: F) -> Result<(Times, String, String), String>
-where
-    F: FnOnce() -> Result<(Times, String), String> + Send,
-{
-    let done = AtomicBool::new(false);
-    let (result, samples) = std::thread::scope(|scope| {
-        let typist = scope.spawn(|| {
-            let result = match processor {
-                Some(processor) => kiral_sys::affinity::pin_current_thread(processor)
-                    .map_err(|error| format!("pinning to processor {processor}: {error}"))
-                    .and_then(|()| typing()),
-                None => typing(),
-            };
-            done.store(true, Ordering::Release);
-            result
-        });
-        let mut samples = Vec::new();
-        while !done.load(Ordering::Acquire) {
-            if let Some(khz) = processor.and_then(topology::clock_khz) {
-                samples.push(khz);
-            }
-            std::thread::sleep(Duration::from_millis(20));
-        }
-        (typist.join().expect("a typist that did not panic"), samples)
-    });
-    let (times, system) = result?;
-    Ok((times, clock_of(samples), system))
-}
-
-/// The clock read while a run went on: its median and range, in GHz.
-fn clock_of(mut samples: Vec<u64>) -> String {
-    if samples.is_empty() {
-        return String::new();
-    }
-    samples.sort_unstable();
-    let ghz = |khz: u64| f64::from(u32::try_from(khz / 1000).unwrap_or(u32::MAX)) / 1000.0;
-    format!(
-        ", {:.2} GHz at the median of {} readings of its clock, {:.2} to {:.2}",
-        ghz(samples[samples.len() / 2]),
-        samples.len(),
-        ghz(samples[0]),
-        ghz(samples[samples.len() - 1])
-    )
 }
 
 /// Types every item into Mozc; returns the times and Mozc's name.
@@ -246,17 +180,4 @@ fn type_with_dictionary(dictionary: &Dictionary<'_>, items: &[Item]) -> (Times, 
         times.conversions.push(convert(dictionary, &item.reading));
     }
     (times, format!("the dictionary {}", dictionary.metadata().name))
-}
-
-fn print_times(what: &str, times: &[Duration]) {
-    let mut sorted = times.to_vec();
-    sorted.sort_unstable();
-    let milliseconds = |time: Duration| time.as_secs_f64() * 1000.0;
-    println!(
-        "    {what}: {} of them, p50 {:.3} ms, p99 {:.3} ms, longest {:.3} ms",
-        sorted.len(),
-        milliseconds(percentile(&sorted, 50)),
-        milliseconds(percentile(&sorted, 99)),
-        milliseconds(sorted.last().copied().unwrap_or_default())
-    );
 }

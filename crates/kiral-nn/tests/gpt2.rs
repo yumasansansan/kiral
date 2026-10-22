@@ -13,9 +13,10 @@
 //! the cache cut back between, which takes the cache of keys and values and the
 //! positions through every way the session is used.
 
+use kiral_kernels::quantized::{Rotation, Scheme};
 use kiral_model::json;
 use kiral_model::safetensors::SafeTensors;
-use kiral_nn::gpt2::{Config, Gpt2, Session};
+use kiral_nn::gpt2::{Config, Gpt2, Precision, Session};
 
 const LAYERS: usize = 2;
 const HEADS: usize = 2;
@@ -244,7 +245,7 @@ fn the_network_is_gpt2_in_every_way_it_is_fed() {
     let tensors = tensors(&mut random);
     let bytes = file(&tensors);
     let file = SafeTensors::parse(&bytes).expect("a file");
-    let model = Gpt2::from_safetensors(&file, config()).expect("a model");
+    let model = Gpt2::from_safetensors(&file, config(), Precision::Single).expect("a model");
     let tokens = [3usize, 7, 1, 10, 0, 7, 4, 9];
     let exact = reference(&tensors, &tokens);
     let ids = tokens.map(|token| u32::try_from(token).expect("small"));
@@ -277,6 +278,63 @@ fn the_network_is_gpt2_in_every_way_it_is_fed() {
         session.feed(&[11], &mut logits).is_err(),
         "a token out of the vocabulary"
     );
+}
+
+/// The largest error of logits against those of double precision, as a share
+/// of the logits' largest magnitude.
+fn error_of(logits: &[f32], exact: &[f64]) -> f64 {
+    let scale = exact.iter().map(|value| value.abs()).fold(0.0, f64::max);
+    logits
+        .iter()
+        .zip(exact)
+        .map(|(&logit, exact)| (f64::from(logit) - exact).abs() / scale)
+        .fold(0.0, f64::max)
+}
+
+#[test]
+fn every_positions_logits_are_those_of_one_at_a_time() {
+    let mut random = Random(24);
+    let tensors = tensors(&mut random);
+    let bytes = file(&tensors);
+    let file = SafeTensors::parse(&bytes).expect("a file");
+    let tokens = [5usize, 2, 9, 9, 0, 3, 8];
+    let exact = reference(&tensors, &tokens);
+    let ids = tokens.map(|token| u32::try_from(token).expect("small"));
+    let rotated = Scheme {
+        rotation: Rotation::Hadamard(16),
+        ..Scheme::INT8
+    };
+    for precision in [
+        Precision::Single,
+        Precision::Integers(Scheme::INT8),
+        Precision::Integers(rotated),
+    ] {
+        let model = Gpt2::from_safetensors(&file, config(), precision).expect("a model");
+        assert_eq!(model.precision(), precision);
+        let mut all = vec![0.0f32; tokens.len() * VOCABULARY];
+        let mut session = Session::new(&model, POSITIONS);
+        session.feed_all(&ids[..2], &mut all[..2 * VOCABULARY]).expect("fed");
+        session.feed_all(&ids[2..], &mut all[2 * VOCABULARY..]).expect("fed");
+        let mut one = vec![0.0f32; VOCABULARY];
+        let mut session = Session::new(&model, POSITIONS);
+        for (position, &id) in ids.iter().enumerate() {
+            session.feed(&[id], &mut one).expect("fed");
+            let row = &all[position * VOCABULARY..][..VOCABULARY];
+            // A row is quantized alone either way, and its sums are taken in the
+            // same order: the two agree to the roundings of attention's sums.
+            let apart = error_of(row, &one.iter().copied().map(f64::from).collect::<Vec<_>>());
+            assert!(apart <= 1e-5, "{precision:?} at {position}: {apart}");
+            // Integers through these two blocks of width 16 come within 1.4e-2 of
+            // the logits' largest magnitude, rotated or not (measured on
+            // x86-64-v2, in the dev and the release profile; single precision
+            // within 2.3e-7): a mistake in the products, as a weight in another
+            // column or a rotation of one side only, moves logits by their own
+            // size.
+            let error = error_of(row, &exact[position]);
+            let bound = if precision == Precision::Single { 1e-4 } else { 5e-2 };
+            assert!(error <= bound, "{precision:?} at {position}: {error}");
+        }
+    }
 }
 
 #[test]
@@ -314,10 +372,22 @@ fn a_missing_or_misshapen_tensor_is_refused() {
     let mut tensors = tensors(&mut random);
     tensors.retain(|(name, _, _)| name != "transformer.h.1.mlp.c_fc.bias");
     let bytes = file(&tensors);
-    let error = Gpt2::from_safetensors(&SafeTensors::parse(&bytes).expect("a file"), config()).expect_err("refused");
+    let error = Gpt2::from_safetensors(
+        &SafeTensors::parse(&bytes).expect("a file"),
+        config(),
+        Precision::Integers(Scheme::INT8),
+    )
+    .expect_err("refused");
     assert!(error.to_string().contains("transformer.h.1.mlp.c_fc.bias"), "{error}");
     let mut tensors = self::tensors(&mut random);
     tensors[0].1 = vec![WIDTH, VOCABULARY];
     let bytes = file(&tensors);
-    assert!(Gpt2::from_safetensors(&SafeTensors::parse(&bytes).expect("a file"), config()).is_err());
+    assert!(
+        Gpt2::from_safetensors(
+            &SafeTensors::parse(&bytes).expect("a file"),
+            config(),
+            Precision::Single
+        )
+        .is_err()
+    );
 }

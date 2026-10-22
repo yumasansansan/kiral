@@ -23,7 +23,7 @@ use kiral_model::json;
 use kiral_model::safetensors::SafeTensors;
 
 use crate::Error;
-use crate::gpt2::{Config, Gpt2, Session};
+use crate::gpt2::{Config, Gpt2, Precision, Session};
 use crate::tokenizer::Tokenizer;
 
 /// The tag before the reading.
@@ -80,12 +80,12 @@ fn read(directory: &Path, name: &str) -> Result<Vec<u8>, Error> {
 impl Zenz {
     /// The model of a directory as Hugging Face publishes zenz: `config.json`,
     /// `model.safetensors`, `vocab.json`, `merges.txt` and
-    /// `special_tokens_map.json`.
+    /// `special_tokens_map.json`; its products computed in `precision`.
     ///
     /// # Errors
     ///
     /// Where a file cannot be read, or is not what it should be.
-    pub fn load(directory: &Path) -> Result<Self, Error> {
+    pub fn load(directory: &Path, precision: Precision) -> Result<Self, Error> {
         let config = read(directory, "config.json")?;
         let config = json::parse(&config).map_err(|error| Error::Json("config.json", error))?;
         let config = config
@@ -94,7 +94,7 @@ impl Zenz {
         let config = Config::from_json(config)?;
         let weights = read(directory, "model.safetensors")?;
         let weights = SafeTensors::parse(&weights).map_err(Error::SafeTensors)?;
-        let model = Gpt2::from_safetensors(&weights, config)?;
+        let model = Gpt2::from_safetensors(&weights, config, precision)?;
         let merges = read(directory, "merges.txt")?;
         let merges =
             String::from_utf8(merges).map_err(|_| Error::Tokenizer("a merges.txt that is not UTF-8".to_owned()))?;
@@ -146,12 +146,15 @@ pub struct Conversion {
     pub prompt_tokens: usize,
     /// The tokens it wrote, the end of text not counted.
     pub tokens: usize,
+    /// The prompt's tokens, then those it wrote.
+    pub sequence: Vec<u32>,
 }
 
 /// Whether bytes of UTF-8 hold a character of the tags, U+EE00 to U+EE0F, and
 /// where: their encodings are EE B8 80 to EE B8 8F, which no other character's
 /// bytes hold, UTF-8 telling the first byte of a character from the others.
-fn tag_in(bytes: &[u8]) -> Option<usize> {
+#[must_use]
+pub fn tag_in(bytes: &[u8]) -> Option<usize> {
     bytes
         .windows(3)
         .position(|window| window[0] == 0xee && window[1] == 0xb8 && (0x80..=0x8f).contains(&window[2]))
@@ -205,6 +208,7 @@ impl<'m> Converter<'m> {
                 break Stop::End;
             };
             tokens += 1;
+            self.tokens.push(next);
             written.extend_from_slice(tokenizer.piece(next));
             if let Some(at) = tag_in(&written) {
                 written.truncate(at);
@@ -220,6 +224,7 @@ impl<'m> Converter<'m> {
             stop,
             prompt_tokens,
             tokens,
+            sequence: self.tokens.clone(),
         })
     }
 }

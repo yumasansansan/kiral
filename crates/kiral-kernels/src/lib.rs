@@ -17,11 +17,12 @@
 //! measurement that shows the portable one slower, and is tested against it at
 //! every level of the processor ([`kiral-cpu`](../kiral_cpu/index.html)).
 //!
-//! The kernels here compute in single precision, as the networks do outside
-//! their products: layer normalization, GELU, softmax, the residual stream and
+//! The kernels compute in single precision, as the networks do outside their
+//! products: layer normalization, GELU, softmax, the residual stream and
 //! attention over the cache of keys and values. The linear layers in single
 //! precision ([`linear`]) are those of the reference that quantized models are
-//! measured against.
+//! measured against; those in integers ([`quantized`]) take weights and inputs
+//! quantized to bytes, their products summed exactly in 32 bits.
 //!
 //! What a kernel promises is a precision, not an order of operations: each
 //! value is within what the analysis of its roundings allows of the exact
@@ -35,6 +36,7 @@ pub mod activation;
 pub mod attention;
 pub mod linear;
 pub mod norm;
+pub mod quantized;
 pub mod vector;
 
 /// The lanes a sum is kept in: 16 values of single precision, 512 bits, one

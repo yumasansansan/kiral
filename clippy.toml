@@ -7,4 +7,4 @@
 # (LICENSES/GPL-3.0-or-later.txt).
 #
 # Names that documentation writes as names, not as code ("..": and clippy's own).
-doc-valid-idents = ["AArch64", "IPAdic", "McNemar", "NEologd", "SudachiDict", "UniDic", ".."]
+doc-valid-idents = ["AArch64", "ConvRot", "IPAdic", "McNemar", "NEologd", "SudachiDict", "UniDic", ".."]
