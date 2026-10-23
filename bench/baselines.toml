@@ -537,3 +537,101 @@ machine = "Intel Core i7-1360P, Ubuntu 26.10"
 core = "E, CPU 8, pinned, 3.70 GHz at the median"
 keys = { count = 1435, p50 = [38.036, 40.663], p99 = [139.642, 145.251] }
 conversions = { count = 50, p50 = [0.543, 0.6], p99 = [73.317, 83.074], correct = [43, 43] }
+
+[[ajimee]]
+system = "zenz-v3.1-small alone in integers, from its model file, the AVX2 form (KIRAL_ISA=avx2): the inputs of seven bits"
+source = "kiral-tools eval --model data/models/zenz-v3.1-small-int8.kmdl, 2026-10-23 (against the AVX-VNNI form's 87.0: +0 / -1, 1858)"
+accuracy = 86.5
+cer = 1.6
+with_context = { accuracy = 82.0, cer = 2.5 }
+without_context = { accuracy = 91.0, cer = 0.69 }
+
+[[ajimee]]
+system = "KIRAL's engine: the dictionary's drafts (mozc-sudachi) verified by zenz-v3.1-small in integers (its model file), up to 8 rounds, the AVX2 form (KIRAL_ISA=avx2): the inputs of seven bits"
+source = "kiral-tools eval --model --dict --rounds 8, 2026-10-23 (against the AVX-VNNI form's 86.0: +0 / -1, 1858)"
+accuracy = 85.5
+cer = 1.7
+with_context = { accuracy = 80.0, cer = 2.7 }
+without_context = { accuracy = 91.0, cer = 0.69 }
+
+[[ajimee]]
+system = "KIRAL's engine: the dictionary's drafts (mozc-sudachi) verified by zenz-v3.1-small in integers (its model file), up to 100 rounds, the AVX2 form (KIRAL_ISA=avx2): the inputs of seven bits"
+source = "kiral-tools eval --model --dict --rounds 100, 2026-10-23 (against the AVX-VNNI form's 86.5: +0 / -1, 1858)"
+accuracy = 86.0
+cer = 1.55
+with_context = { accuracy = 81.0, cer = 2.41 }
+without_context = { accuracy = 91.0, cer = 0.69 }
+
+[[agree]]
+system = "zenz-v3.1-small, weights of 8 bits, from the model file (--quantized), the AVX2 form (KIRAL_ISA=avx2): the inputs of seven bits"
+source = "kiral-tools agree, 2026-10-23"
+conversion_positions = { agree = 4395, of = 4396 }
+every_position = { agree = 12538, of = 12747 }
+
+[[kernels]]
+system = "the products in integers of zenz's layers, weights of 8 bits, with the AVX2 form (inputs of seven bits); GMAC/s, the least and the greatest over the five layers and both runs"
+source = "kiral-tools bench kernels --rows 1,4,16,20,40, 2026-10-23, two runs"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "P, CPU 0, pinned, 4.10 and 4.30 GHz at the median"
+avx2 = { rows_1 = [44.0, 84.4], rows_4 = [99.4, 110.2], rows_16_to_40 = [94.7, 110.8] }
+avx_vnni = { rows_1 = [45.4, 115.5], rows_4 = [146.3, 188.5], rows_16_to_40 = [173.6, 200.7] }
+portable = { any_rows = [7.4, 9.3] }
+
+[[kernels]]
+system = "the products in integers of zenz's layers, weights of 8 bits, with the AVX2 form (inputs of seven bits); GMAC/s, the least and the greatest over the five layers and both runs"
+source = "kiral-tools bench kernels --rows 1,4,16,20,40, 2026-10-23, two runs"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "E, CPU 8, pinned, 3.70 GHz at the median"
+avx2 = { rows_1 = [23.2, 26.1], rows_4 = [24.8, 26.3], rows_16_to_40 = [25.4, 26.4] }
+avx_vnni = { rows_1 = [32.2, 45.8], rows_4 = [45.9, 48.0], rows_16_to_40 = [44.3, 47.9] }
+portable = { any_rows = [5.8, 6.7] }
+
+[[model]]
+system = "zenz-v3.1-small alone in integers (--int8), the AVX2 form (KIRAL_ISA=avx2): the inputs of seven bits"
+source = "kiral-tools bench model --limit 50, 2026-10-23, two runs in turn with the AVX-VNNI form (prompts p50 20.644 and 22.766 ms, steps 4.315 and 4.398 at 4.92 and 4.30 GHz)"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "P, CPU 0, pinned, 4.40 and 4.78 GHz at the median"
+prompts = { count = 50, tokens_p50 = 37, p50 = [34.189, 33.208], p99 = [100.344, 102.237] }
+steps = { count = 1051, p50 = [4.839, 4.776], p99 = [6.854, 6.272] }
+
+[[model]]
+system = "zenz-v3.1-small alone in integers (--int8), the AVX2 form (KIRAL_ISA=avx2): the inputs of seven bits"
+source = "kiral-tools bench model --limit 50, 2026-10-23, two runs in turn with the AVX-VNNI form (prompts p50 75.19 and 74.622 ms, steps 9.008 and 8.989)"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "E, CPU 8, pinned, 3.70 GHz at the median"
+prompts = { count = 50, tokens_p50 = 37, p50 = [129.881, 129.422], p99 = [374.881, 376.879] }
+steps = { count = 1051, p50 = [9.764, 9.752], p99 = [12.073, 12.367] }
+
+[[keys]]
+system = "KIRAL's engine's refinement of each key, back to back (kiral-tools bench keys), the AVX2 form (KIRAL_ISA=avx2): the inputs of seven bits; 19.8 tokens fed a key on average"
+source = "kiral-tools bench keys --limit 50, 2026-10-23, two runs on AC power in turn with the AVX-VNNI form (p50 11.969 and 11.122 ms, p99 43.127 and 41.004)"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "P, CPU 0, pinned, 4.39 GHz at the median of both"
+keys = { count = 1435, p50 = [16.702, 16.592], p99 = [63.503, 64.118] }
+conversions = { count = 50, p50 = [0.38, 0.38], p99 = [39.237, 32.818], correct = [43, 43] }
+
+[[keys]]
+system = "KIRAL's engine's refinement of each key, back to back (kiral-tools bench keys), the AVX2 form (KIRAL_ISA=avx2): the inputs of seven bits; 19.8 tokens fed a key on average"
+source = "kiral-tools bench keys --limit 50, 2026-10-23, two runs on AC power in turn with the AVX-VNNI form (p50 38.049 and 38.157 ms, p99 138.004 and 139.933)"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "E, CPU 8, pinned, 3.70 GHz at the median"
+keys = { count = 1435, p50 = [64.978, 64.235], p99 = [228.041, 226.981] }
+conversions = { count = 50, p50 = [0.598, 0.587], p99 = [126.455, 124.758], correct = [43, 43] }
+
+[[replay]]
+system = "KIRAL's engine: the dictionary's drafts (mozc-sudachi) refined by zenz-v3.1-small in integers (its model file) on a worker, a round a key, a kana every 100 ms; Space waits 30 ms for up to 8 rounds; the AVX2 form (KIRAL_ISA=avx2): the inputs of seven bits"
+source = "kiral-tools replay --model --dict --limit 50, 2026-10-23, two runs on AC power (energy preference performance), the package at 68 to 71 C as the runs began"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "P, typing on CPU 0, 0.59 and 0.47 GHz at the median; the worker on CPU 2, pinned, 1.53 and 1.37 GHz at the median"
+kana = { count = 1435, p50 = [0.12, 0.121], p99 = [0.472, 0.488] }
+refinements = { count = [1435, 1435], p50 = [18.106, 17.482], p99 = [58.746, 58.208] }
+conversions = { count = 50, refined = [49, 50], p50 = [0.634, 0.638], p99 = [30.189, 30.012], correct = [42, 43] }
+
+[[replay]]
+system = "KIRAL's engine: the dictionary's drafts (mozc-sudachi) refined by zenz-v3.1-small in integers (its model file) on a worker, a round a key, a kana every 100 ms; Space waits 30 ms for up to 8 rounds; the AVX2 form (KIRAL_ISA=avx2): the inputs of seven bits"
+source = "kiral-tools replay --model --dict --limit 50, 2026-10-23, two runs on AC power (energy preference performance), the package at 68 to 71 C as the runs began"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "E, typing on CPU 8, 0.40 GHz at the median of both; the worker on CPU 9, pinned, 3.70 GHz at the median of both"
+kana = { count = 1435, p50 = [0.195, 0.194], p99 = [0.719, 0.742] }
+refinements = { count = [932, 931], p50 = [51.801, 51.684], p99 = [98.111, 97.922] }
+conversions = { count = 50, refined = [30, 30], p50 = [11.746, 11.559], p99 = [30.108, 30.112], correct = [37, 37] }

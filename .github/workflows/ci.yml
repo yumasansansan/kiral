@@ -11,7 +11,10 @@
 # its layout, clippy with every warning an error, and the tests in the dev and
 # the release profile, which run the kernels at every level the runner has. The
 # x86-64 builds are for x86-64-v2, the macOS ones for Apple M1 and later, macOS
-# 26.0 and later.
+# 26.0 and later. It then times the kernels' forms on the runner's processor
+# (kiral-tools bench kernels), which ci/setup.sh names: the rates of the forms no
+# machine at hand runs -- AVX-512 with VNNI, AArch64's dot products -- are
+# measured there, unpinned, on whatever processor the runner has.
 #
 # The targets job builds the workspace on x86-64 for x86-64-v3, and for
 # x86-64-v4 with vectors of 512 bits, as distributions that raise the baseline
@@ -71,6 +74,9 @@ jobs:
 
       - name: Check and test
         run: bash ci/rust.sh
+
+      - name: Time the kernels
+        run: cargo run --release --locked -p kiral-tools -- bench kernels --rows 1,4,16,40
 
   targets:
     name: x86-64-v3 and v4 (${{ matrix.os }})

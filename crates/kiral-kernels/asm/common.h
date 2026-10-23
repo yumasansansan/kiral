@@ -17,7 +17,10 @@
 //     END_FUNCTION(name)  its size, on ELF;
 //     END_FILE            the stack not executable, on ELF, which otherwise
 //                         takes an object without the note for one that needs
-//                         an executable stack.
+//                         an executable stack;
+//     CONSTANTS           the section of constants that the kernels read:
+//                         .rodata on ELF, __TEXT,__const on Mach-O, .rdata on
+//                         COFF.
 //
 // Nothing else in the kernels may be of one format alone.
 
@@ -39,6 +42,7 @@
     KIRAL_BRANCH_TARGET
 #define END_FUNCTION(name) .size name, . - name
 #define END_FILE .section .note.GNU-stack, "", @progbits
+#define CONSTANTS .section .rodata
 #elif defined(__APPLE__)
 #define FUNCTION(name) \
     .globl _##name;    \
@@ -47,6 +51,7 @@
     KIRAL_BRANCH_TARGET
 #define END_FUNCTION(name)
 #define END_FILE
+#define CONSTANTS .section __TEXT, __const
 #elif defined(_WIN32)
 #define FUNCTION(name) \
     .globl name;       \
@@ -59,6 +64,7 @@
     KIRAL_BRANCH_TARGET
 #define END_FUNCTION(name)
 #define END_FILE
+#define CONSTANTS .section .rdata, "dr"
 #else
 #error "an object format the kernels are not written for"
 #endif

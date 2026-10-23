@@ -38,7 +38,7 @@ pub enum Level {
     /// The portable form alone.
     V2,
     /// `avx2`: AVX2 and FMA. The integer products by `vpmaddubsw` and `vpmaddwd`,
-    /// exact for weights of seven bits.
+    /// exact for inputs of seven bits.
     Avx2,
     /// `avx-vnni`: AVX2, FMA and the VEX form of `vpdpbusd`: Alder Lake, Raptor
     /// Lake, Meteor Lake and after; Zen 5.

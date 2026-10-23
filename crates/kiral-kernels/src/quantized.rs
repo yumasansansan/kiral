@@ -11,8 +11,10 @@
 //!
 //! The weights are signed and symmetric, a weight `w = s q` with `|q| <= 127`
 //! at eight bits (`2^(b - 1) - 1` at `b`); the inputs unsigned with a zero
-//! point, `x = s (q - z)` with `0 <= q <= 255`, the range of each group of them
-//! from its least to its greatest, 0 within it: the inputs of a block's
+//! point, `x = s (q - z)` with `0 <= q <= 255` -- `127` for the form of AVX2,
+//! whose sums of two products in a word would pass 32767 otherwise
+//! ([`crate::Form::input_max`]) -- the range of each group of them from its
+//! least to its greatest, 0 within it: the inputs of a block's
 //! contraction, after GELU, lie mostly on one side of 0, where a symmetric
 //! scale would waste half its range. A scale holds for a group of [`GROUP`]
 //! numbers of a sum, a weight's for its column's group and an input's for its
@@ -69,7 +71,8 @@ pub const QUADS: usize = GROUP / 4;
 /// The columns of a panel: a quad of each, 64 bytes, is a line of the caches.
 pub const PANEL: usize = 16;
 
-/// The greatest integer of an input.
+/// The greatest integer of an input, a byte's; the form of AVX2 takes inputs of
+/// seven bits ([`crate::Form::input_max`]).
 pub const INPUT_MAX: f32 = 255.0;
 
 /// The bytes of a group of a panel: its quads, then its scales and offsets.
@@ -360,6 +363,8 @@ pub struct Rows {
     depth: usize,
     groups: usize,
     rotation: Option<usize>,
+    /// The greatest integer of an input: [`INPUT_MAX`], or 127.
+    largest: f32,
     bytes: Vec<u8>,
     /// Row by row, group by group, the scale and then the offset.
     floats: Vec<f32>,
@@ -375,22 +380,37 @@ impl Rows {
     }
 
     /// Quantizes rows of `depth` inputs in place of those held, for weights of
-    /// a rotation: each row rotated, then each group to the range from its
-    /// least to its greatest input, 0 within it, an input to the nearest
-    /// integer of the scale, ties to even, plus the zero point, the integer 0
-    /// stands for. The group past the depth holds the zero point.
+    /// a rotation, for the form of the kernels in effect ([`crate::form`]): as
+    /// [`Rows::quantize_in`] does.
+    ///
+    /// # Panics
+    ///
+    /// As [`Rows::quantize_in`].
+    pub fn quantize(&mut self, input: &[f32], depth: usize, rotation: Rotation) {
+        self.quantize_in(crate::form(), input, depth, rotation);
+    }
+
+    /// Quantizes rows of `depth` inputs in place of those held, for weights of
+    /// a rotation and the products of a form: each row rotated, then each group
+    /// to the range from its least to its greatest input, 0 within it, an input
+    /// to the nearest integer of the scale, ties to even, plus the zero point,
+    /// the integer 0 stands for, up to the form's greatest integer
+    /// ([`crate::Form::input_max`]). The group past the depth holds the zero
+    /// point.
     ///
     /// # Panics
     ///
     /// Where `depth` is 0, `input` is not whole rows of it, or the rotation is
     /// not of a power of four.
-    pub fn quantize(&mut self, input: &[f32], depth: usize, rotation: Rotation) {
+    pub fn quantize_in(&mut self, form: Form, input: &[f32], depth: usize, rotation: Rotation) {
         assert!(depth > 0, "rows of no inputs");
         assert_eq!(input.len() % depth, 0, "an input that is not whole rows of {depth}");
         let groups = depth.div_ceil(GROUP);
         let rows = input.len() / depth;
+        let largest = form.input_max();
         self.depth = depth;
         self.groups = groups;
+        self.largest = largest;
         self.rotation = match rotation {
             Rotation::None => None,
             Rotation::Hadamard(order) => Some(order),
@@ -410,11 +430,18 @@ impl Rows {
                 let values = &input[group * GROUP..depth.min((group + 1) * GROUP)];
                 let at = row * groups + group;
                 let bytes = &mut self.bytes[at * GROUP..][..GROUP];
-                let (scale, offset) = quantize_group(values, bytes);
+                let (scale, offset) = quantize_group(values, bytes, largest);
                 self.floats[2 * at] = scale;
                 self.floats[2 * at + 1] = offset;
             }
         }
+    }
+
+    /// The greatest integer of an input of the rows: [`INPUT_MAX`], or 127 for
+    /// the form of AVX2.
+    #[must_use]
+    pub fn input_max(&self) -> f32 {
+        self.largest
     }
 
     /// The rotation the rows were quantized after.
@@ -484,7 +511,7 @@ const ROUNDER: f32 = 8_388_608.0;
 /// by `round_ties_even` and converted by `as`, saturating, with the same bytes
 /// (20 rows of 3072: 0.0377 ms against 0.1084 on a P-core of an i7-1360P at
 /// 4.7 GHz, the medians of repeated calls).
-fn quantize_group(values: &[f32], bytes: &mut [u8]) -> (f32, f32) {
+fn quantize_group(values: &[f32], bytes: &mut [u8], largest: f32) -> (f32, f32) {
     let mut least = [0.0f32; 16];
     let mut greatest = [0.0f32; 16];
     let (chunks, rest) = values.as_chunks::<16>();
@@ -505,13 +532,13 @@ fn quantize_group(values: &[f32], bytes: &mut [u8]) -> (f32, f32) {
         0.0f32,
         |greatest, value| if value > greatest { value } else { greatest },
     );
-    let scale = (greatest - least) / INPUT_MAX;
+    let scale = (greatest - least) / largest;
     let inverse = if scale > 0.0 { 1.0 / scale } else { 0.0 };
     let zero = (-least * inverse).round_ties_even();
     let shift = zero + ROUNDER;
     let (inputs, past) = bytes.split_at_mut(values.len());
     for (byte, &value) in inputs.iter_mut().zip(values) {
-        *byte = lowest_byte(multiply_add(value, inverse, shift).clamp(ROUNDER, ROUNDER + INPUT_MAX));
+        *byte = lowest_byte(multiply_add(value, inverse, shift).clamp(ROUNDER, ROUNDER + largest));
     }
     past.fill(lowest_byte(shift));
     (scale, scale * zero)
@@ -545,7 +572,7 @@ pub fn linear(input: &Rows, weight: &Packed<'_>, bias: &[f32], output: &mut [f32
 /// As [`linear`]; and where the form is one this build or this processor has
 /// not got.
 pub fn linear_in(form: Form, input: &Rows, weight: &Packed<'_>, bias: &[f32], output: &mut [f32]) {
-    let rows = check(input, weight, bias);
+    let rows = check(form, input, weight, bias);
     let width = weight.width;
     assert_eq!(
         output.len(),
@@ -580,7 +607,7 @@ pub fn likeliest(input: &Rows, weight: &Packed<'_>, bias: &[f32], output: &mut [
 /// As [`likeliest`]; and where the form is one this build or this processor
 /// has not got.
 pub fn likeliest_in(form: Form, input: &Rows, weight: &Packed<'_>, bias: &[f32], output: &mut [Option<usize>]) {
-    let rows = check(input, weight, bias);
+    let rows = check(form, input, weight, bias);
     assert_eq!(
         output.len(),
         rows,
@@ -600,9 +627,9 @@ pub fn likeliest_in(form: Form, input: &Rows, weight: &Packed<'_>, bias: &[f32],
     });
 }
 
-/// Checks that the input, the weights and the bias fit together; returns the
-/// rows of the input.
-fn check(input: &Rows, weight: &Packed<'_>, bias: &[f32]) -> usize {
+/// Checks that the input, the weights and the bias fit together, and the
+/// inputs' integers the form's; returns the rows of the input.
+fn check(form: Form, input: &Rows, weight: &Packed<'_>, bias: &[f32]) -> usize {
     let Packed {
         depth, width, scheme, ..
     } = *weight;
@@ -613,6 +640,12 @@ fn check(input: &Rows, weight: &Packed<'_>, bias: &[f32]) -> usize {
         "inputs rotated otherwise than the weights"
     );
     assert_eq!(bias.len(), width, "a bias of another width than the layer's {width}");
+    assert!(
+        input.is_empty() || input.largest <= form.input_max(),
+        "inputs up to {}, past the {form} form's {}",
+        input.largest,
+        form.input_max()
+    );
     input.len()
 }
 
@@ -621,12 +654,28 @@ fn check(input: &Rows, weight: &Packed<'_>, bias: &[f32]) -> usize {
 /// sums of the row's outputs from `column` on. Each row's runs come in the
 /// order of their columns.
 fn sums_in(form: Form, input: &Rows, weight: &Packed<'_>, bias: &[f32], each: impl FnMut(usize, usize, &[f32])) {
+    #[cfg(target_arch = "x86_64")]
+    use crate::x86_64::{Products, TILE_ROWS, qgemm};
     match form {
         Form::Portable => portable(input, weight, bias, each),
         #[cfg(target_arch = "x86_64")]
-        Form::AvxVnni => avx_vnni(input, weight, bias, each),
-        #[cfg(not(target_arch = "x86_64"))]
-        Form::AvxVnni => panic!("the AVX-VNNI kernels on another architecture than x86-64"),
+        Form::Avx2 => tiled::<TILE_ROWS>(input, weight, bias, each, |rows, groups, a, floats, panel, tile| {
+            qgemm(Products::Avx2, rows, groups, a, floats, panel, tile);
+        }),
+        #[cfg(target_arch = "x86_64")]
+        Form::AvxVnni => tiled::<TILE_ROWS>(input, weight, bias, each, |rows, groups, a, floats, panel, tile| {
+            qgemm(Products::AvxVnni, rows, groups, a, floats, panel, tile);
+        }),
+        #[cfg(target_arch = "x86_64")]
+        Form::Avx512Vnni => tiled::<TILE_ROWS>(input, weight, bias, each, |rows, groups, a, floats, panel, tile| {
+            qgemm(Products::Avx512Vnni, rows, groups, a, floats, panel, tile);
+        }),
+        #[cfg(target_arch = "aarch64")]
+        Form::Dotprod => {
+            tiled::<{ crate::aarch64::TILE_ROWS }>(input, weight, bias, each, crate::aarch64::qgemm_dotprod);
+        }
+        // The forms of another architecture than the build's.
+        _ => panic!("the {form} kernels on another architecture than theirs"),
     }
 }
 
@@ -672,12 +721,17 @@ fn portable(input: &Rows, weight: &Packed<'_>, bias: &[f32], mut each: impl FnMu
     }
 }
 
-/// The AVX-VNNI form of [`sums_in`]: tiles of up to six rows by a panel's
+/// A form in assembly of [`sums_in`]: tiles of up to `T` rows by a panel's
 /// sixteen columns, each started from the bias in a tile of its own and summed
-/// by the kernel.
-#[cfg(target_arch = "x86_64")]
-fn avx_vnni(input: &Rows, weight: &Packed<'_>, bias: &[f32], mut each: impl FnMut(usize, usize, &[f32])) {
-    use crate::x86_64::{AVX_VNNI_ROWS, qgemm_avx_vnni};
+/// by the form's kernel, `kernel(rows, groups, a, a_floats, panel, tile)`.
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+fn tiled<const T: usize>(
+    input: &Rows,
+    weight: &Packed<'_>,
+    bias: &[f32],
+    mut each: impl FnMut(usize, usize, &[f32]),
+    mut kernel: impl FnMut(usize, usize, &[u8], &[f32], &[u8], &mut [[f32; PANEL]; T]),
+) {
     let Packed {
         width,
         groups,
@@ -686,18 +740,18 @@ fn avx_vnni(input: &Rows, weight: &Packed<'_>, bias: &[f32], mut each: impl FnMu
     } = *weight;
     let rows = input.len();
     let row_bytes = groups * GROUP;
-    let mut tile = [[0.0f32; PANEL]; AVX_VNNI_ROWS];
+    let mut tile = [[0.0f32; PANEL]; T];
     for (panel, panel_bytes) in bytes.chunks_exact(groups * GROUP_BYTES).enumerate() {
         let column = panel * PANEL;
         let columns = PANEL.min(width - column);
         let mut row = 0;
         while row < rows {
-            let take = AVX_VNNI_ROWS.min(rows - row);
+            let take = T.min(rows - row);
             for sums in &mut tile[..take] {
                 sums[..columns].copy_from_slice(&bias[column..][..columns]);
                 sums[columns..].fill(0.0);
             }
-            qgemm_avx_vnni(
+            kernel(
                 take,
                 groups,
                 &input.bytes[row * row_bytes..][..take * row_bytes],

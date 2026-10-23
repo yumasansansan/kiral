@@ -562,11 +562,13 @@ fn time_kernels(numbers: &mut Numbers, forms: &[Form], rows: &[usize]) -> Vec<St
         let packed = Packed::quantize(depth, width, Scheme::INT8, |k, j| weights[k * width + j]);
         let bias = numbers.values(width);
         for &count in rows {
+            let values = numbers.values(depth * count);
             let mut input = Rows::new();
-            input.quantize(&numbers.values(depth * count), depth, Rotation::None);
             let mut output = vec![0.0f32; count * width];
             let mut times = Vec::new();
             for &form in forms {
+                // The inputs as each form takes them: of seven bits for AVX2.
+                input.quantize_in(form, &values, depth, Rotation::None);
                 times.push((
                     form,
                     median_call(|| quantized::linear_in(form, &input, &packed, &bias, &mut output)),

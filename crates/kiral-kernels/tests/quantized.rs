@@ -17,15 +17,15 @@
 //! quantization's errors allow. Each under several schemes, at depths and
 //! widths that are not multiples of a group, a panel or a rotation, and with
 //! every number of rows a tile of each form may take; the products in every
-//! form the processor runs. Packed weights read back from their bytes, as a
+//! form the processor runs, the inputs quantized for each (seven bits for
+//! AVX2's). Packed weights read back from their bytes, as a
 //! model file holds them, are the same weights. The likeliest output of each
 //! row is the largest of its products, the first of those equal to it.
 
 use kiral_cpu::Features;
 use kiral_kernels::Form;
 use kiral_kernels::quantized::{
-    GROUP, GROUP_BYTES, INPUT_MAX, PANEL, Packed, QUADS, Rotation, Rows, Scheme, likeliest_in, linear, linear_in,
-    rotate,
+    GROUP, GROUP_BYTES, PANEL, Packed, QUADS, Rotation, Rows, Scheme, likeliest_in, linear, linear_in, rotate,
 };
 use kiral_kernels::vector::argmax;
 
@@ -281,15 +281,22 @@ fn inputs_are_their_groups_steps() {
     let mut random = Random(23);
     let mut rows = Rows::new();
     assert!(rows.is_empty());
-    for rotation in [Rotation::None, Rotation::Hadamard(64)] {
+    // A byte's integers, and AVX2's seven bits, whatever this processor runs.
+    for (rotation, form) in [
+        (Rotation::None, Form::Portable),
+        (Rotation::Hadamard(64), Form::Portable),
+        (Rotation::None, Form::Avx2),
+    ] {
+        let largest = form.input_max();
         for (depth, _, count) in SHAPES {
             let mut input = random.values(depth * count);
             // A row of zeros, which has no scale.
             if count > 1 {
                 input[depth..2 * depth].fill(0.0);
             }
-            rows.quantize(&input, depth, rotation);
+            rows.quantize_in(form, &input, depth, rotation);
             assert_eq!((rows.len(), rows.depth(), rows.rotation()), (count, depth, rotation));
+            assert_eq!(rows.input_max(), largest);
             let groups = depth.div_ceil(GROUP);
             for (row, input) in input.chunks_exact(depth).enumerate() {
                 let input = rotated(input, rotation);
@@ -299,7 +306,7 @@ fn inputs_are_their_groups_steps() {
                     let greatest = values.iter().copied().fold(0.0f32, f32::max);
                     let at = row * groups + group;
                     let scale = rows.scale(row, group);
-                    assert_eq!(scale, (greatest - least) / INPUT_MAX);
+                    assert_eq!(scale, (greatest - least) / largest);
                     // The zero point as the rule takes it: by the scale's inverse.
                     let zero = if scale > 0.0 {
                         (-least * (1.0 / scale)).round_ties_even()
@@ -313,6 +320,7 @@ fn inputs_are_their_groups_steps() {
                     );
                     let bytes = &rows.bytes()[at * GROUP..][..GROUP];
                     for (e, &value) in values.iter().enumerate() {
+                        assert!(f32::from(bytes[e]) <= largest, "an integer past {largest}");
                         let error =
                             (f64::from(scale) * (f64::from(bytes[e]) - f64::from(zero)) - f64::from(value)).abs();
                         assert!(
@@ -333,14 +341,16 @@ fn inputs_are_their_groups_steps() {
 
 /// The products in double precision from the integers, scales and offsets the
 /// kernel takes, and the sum of the magnitudes added: `bias + sum over groups of
-/// (sa sb sum(qa qb) - oa ob)`.
+/// (sa sb sum(qa qb) - oa ob)`. The magnitudes are the larger of that sum's
+/// terms and of the same sum's as the dot products' form adds it, its inputs
+/// made signed, `sa sb sum((qa - 128) qb) - (oa - 128 sa) ob`.
 fn exact(rows: &Rows, packed: &Packed, bias: &[f32], row: usize, j: usize) -> (f64, f64) {
     let groups = packed.depth().div_ceil(GROUP);
     let mut value = f64::from(bias[j]);
     let mut magnitude = value.abs();
     for group in 0..groups {
         let at = row * groups + group;
-        let mut products = 0i64;
+        let (mut products, mut signed) = (0i64, 0i64);
         for e in 0..GROUP {
             let k = group * GROUP + e;
             let q = if k < packed.depth() {
@@ -348,14 +358,20 @@ fn exact(rows: &Rows, packed: &Packed, bias: &[f32], row: usize, j: usize) -> (f
             } else {
                 0
             };
-            products += i64::from(rows.bytes()[at * GROUP + e]) * i64::from(q);
+            let input = i64::from(rows.bytes()[at * GROUP + e]);
+            products += input * i64::from(q);
+            signed += (input - 128) * i64::from(q);
         }
         let (_, weight_scale, weight_offset) = weight_of(packed, group * GROUP, j);
+        let (input_scale, input_offset) = (f64::from(rows.scale(row, group)), f64::from(rows.offset(row, group)));
         let products = f64::from(i32::try_from(products).expect("a group's products"));
-        let scaled = f64::from(rows.scale(row, group)) * f64::from(weight_scale) * products;
-        let offset = f64::from(rows.offset(row, group)) * f64::from(weight_offset);
+        let signed = f64::from(i32::try_from(signed).expect("a group's products"));
+        let scaled = input_scale * f64::from(weight_scale) * products;
+        let offset = input_offset * f64::from(weight_offset);
         value += scaled - offset;
-        magnitude += scaled.abs() + offset.abs();
+        let signed_scaled = input_scale * f64::from(weight_scale) * signed;
+        let signed_offset = (input_offset - 128.0 * input_scale) * f64::from(weight_offset);
+        magnitude += (scaled.abs() + offset.abs()).max(signed_scaled.abs() + signed_offset.abs());
     }
     (value, magnitude)
 }
@@ -375,16 +391,18 @@ fn products_are_those_of_double_precision() {
         for (depth, width, count) in SHAPES {
             let weights = random.values(depth * width);
             let packed = Packed::quantize(depth, width, scheme, |k, j| weights[k * width + j]);
-            rows.quantize(&random.values(depth * count), depth, scheme.rotation);
+            let input = random.values(depth * count);
             let bias = random.values(width);
             for form in forms() {
+                rows.quantize_in(form, &input, depth, scheme.rotation);
                 let mut output = vec![f32::NAN; count * width];
                 linear_in(form, &rows, &packed, &bias, &mut output);
                 // A group's term goes through the product of the scales, its
-                // product with the sum and its addition, each rounded, and two
-                // more additions for each group after it; the bias through two
-                // for each group.
-                let n = 2 * depth.div_ceil(GROUP) + 3;
+                // product with the sum and its addition, each rounded -- the
+                // dot products' form moves the offset by a rounding more -- and
+                // two more additions for each group after it; the bias through
+                // two for each group.
+                let n = 2 * depth.div_ceil(GROUP) + 4;
                 for row in 0..count {
                     for j in 0..width {
                         let (value, magnitude) = exact(&rows, &packed, &bias, row, j);
@@ -419,11 +437,12 @@ fn every_number_of_rows_takes_its_tile() {
     let bias = random.values(width);
     let mut rows = Rows::new();
     for count in 1..=13 {
-        rows.quantize(&random.values(depth * count), depth, Rotation::None);
+        let input = random.values(depth * count);
         for form in forms() {
+            rows.quantize_in(form, &input, depth, Rotation::None);
             let mut output = vec![f32::NAN; count * width];
             linear_in(form, &rows, &packed, &bias, &mut output);
-            let n = 2 * depth.div_ceil(GROUP) + 3;
+            let n = 2 * depth.div_ceil(GROUP) + 4;
             for row in 0..count {
                 for j in 0..width {
                     let (value, magnitude) = exact(&rows, &packed, &bias, row, j);
@@ -452,9 +471,10 @@ fn weights_read_where_they_lie_are_those_packed() {
         let bytes = packed.bytes();
         let read = Packed::from_bytes(depth, width, scheme, bytes).expect("the bytes of the layer's panels");
         assert_eq!(read, packed);
-        rows.quantize(&random.values(depth * count), depth, scheme.rotation);
+        let input = random.values(depth * count);
         let bias = random.values(width);
         for form in forms() {
+            rows.quantize_in(form, &input, depth, scheme.rotation);
             let mut packed_output = vec![0.0f32; count * width];
             let mut read_output = vec![f32::NAN; count * width];
             linear_in(form, &rows, &packed, &bias, &mut packed_output);
@@ -543,8 +563,9 @@ fn the_likeliest_output_is_the_first_largest_of_the_products() {
         let packed = Packed::quantize(depth, width, Scheme::INT8, |k, j| weights[k * width + j]);
         let bias = random.values(width);
         for count in [1, 2, 5, 6, 7, 13] {
-            rows.quantize(&random.values(depth * count), depth, Rotation::None);
+            let input = random.values(depth * count);
             for form in forms() {
+                rows.quantize_in(form, &input, depth, Rotation::None);
                 let mut output = vec![0.0f32; count * width];
                 linear_in(form, &rows, &packed, &bias, &mut output);
                 let mut likeliest = vec![Some(usize::MAX); count];
@@ -558,7 +579,6 @@ fn the_likeliest_output_is_the_first_largest_of_the_products() {
     // of NaNs alone, none; columns past a panel and in its second strip.
     let (depth, width) = (3, 40);
     let packed = Packed::quantize(depth, width, Scheme::INT8, |_, _| 0.0);
-    rows.quantize(&[0.5, -1.0, 2.0], depth, Rotation::None);
     let cases: [(Vec<f32>, Option<usize>); 4] = [
         (
             (0..width).map(|j| if j == 9 || j == 33 { 3.0 } else { 1.0 }).collect(),
@@ -576,6 +596,7 @@ fn the_likeliest_output_is_the_first_largest_of_the_products() {
     ];
     for (bias, expected) in cases {
         for form in forms() {
+            rows.quantize_in(form, &[0.5, -1.0, 2.0], depth, Rotation::None);
             let mut likeliest = [Some(usize::MAX)];
             likeliest_in(form, &rows, &packed, &bias, &mut likeliest);
             assert_eq!(likeliest, [expected], "{form}: {bias:?}");

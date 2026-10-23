@@ -17,10 +17,13 @@
 //! measurement that shows the portable one slower, and is tested against it at
 //! every level of the processor ([`kiral-cpu`](../kiral_cpu/index.html)).
 //!
-//! The forms ([`Form`]): the portable one, and the AVX-VNNI kernel of the
-//! products in integers (`asm/x86_64/qgemm_avx_vnni.S`), which `build.rs`
-//! assembles with Clang. The form in effect ([`form`]) is the most preferred
-//! that the processor runs and the environment allows (`KIRAL_ISA`,
+//! The forms ([`Form`]): the portable one, and the kernels of the products in
+//! integers in assembly, which `build.rs` assembles with Clang: for AVX2
+//! without VNNI (`asm/x86_64/qgemm_avx2.S`), AVX-VNNI
+//! (`asm/x86_64/qgemm_avx_vnni.S`), AVX-512 with VNNI
+//! (`asm/x86_64/qgemm_avx512_vnni.S`) and AArch64's dot products
+//! (`asm/aarch64/qgemm_dotprod.S`). The form in effect ([`form`]) is the most
+//! preferred that the processor runs and the environment allows (`KIRAL_ISA`,
 //! `KIRAL_KERNELS=portable`), chosen once; each call into assembly is one
 //! unsafe block, in the module of its architecture, whose comment says what
 //! was checked, and the rest of the crate denies unsafe code.
@@ -44,6 +47,8 @@ use std::sync::OnceLock;
 
 use kiral_cpu::{Choice, Features, Level, Request};
 
+#[cfg(target_arch = "aarch64")]
+mod aarch64;
 pub mod activation;
 pub mod attention;
 pub mod linear;
@@ -59,20 +64,36 @@ mod x86_64;
 pub enum Form {
     /// Plain Rust, compiled for the build's baseline.
     Portable,
+    /// Assembly for AVX2 without VNNI: `vpmaddubsw` and `vpmaddwd` on 256 bits,
+    /// the inputs of seven bits (x86-64).
+    Avx2,
     /// Assembly for AVX-VNNI: `vpdpbusd` on 256 bits (x86-64).
     AvxVnni,
+    /// Assembly for AVX-512 with VNNI: `vpdpbusd` on 512 bits (x86-64).
+    Avx512Vnni,
+    /// Assembly for AArch64's dot products: `sdot` (AArch64).
+    Dotprod,
 }
 
 impl Form {
     /// Every form, the reference first, then the more preferred after the less.
-    pub const ALL: [Self; 2] = [Self::Portable, Self::AvxVnni];
+    pub const ALL: [Self; 5] = [
+        Self::Portable,
+        Self::Avx2,
+        Self::AvxVnni,
+        Self::Avx512Vnni,
+        Self::Dotprod,
+    ];
 
     /// The form's name, as the tools take it.
     #[must_use]
     pub const fn name(self) -> &'static str {
         match self {
             Self::Portable => "portable",
+            Self::Avx2 => "avx2",
             Self::AvxVnni => "avx-vnni",
+            Self::Avx512Vnni => "avx512-vnni",
+            Self::Dotprod => "dotprod",
         }
     }
 
@@ -87,7 +108,10 @@ impl Form {
     pub const fn level(self) -> Option<Level> {
         match self {
             Self::Portable => None,
+            Self::Avx2 => Some(Level::Avx2),
             Self::AvxVnni => Some(Level::AvxVnni),
+            Self::Avx512Vnni => Some(Level::Avx512Vnni),
+            Self::Dotprod => Some(Level::Dotprod),
         }
     }
 
@@ -97,7 +121,20 @@ impl Form {
     pub const fn is_built(self) -> bool {
         match self {
             Self::Portable => true,
-            Self::AvxVnni => cfg!(target_arch = "x86_64"),
+            Self::Avx2 | Self::AvxVnni | Self::Avx512Vnni => cfg!(target_arch = "x86_64"),
+            Self::Dotprod => cfg!(target_arch = "aarch64"),
+        }
+    }
+
+    /// The greatest integer of an input that the form's products take: 255,
+    /// a byte's, or 127 for AVX2, whose `vpmaddubsw` sums two products of an
+    /// input by a weight in a word, which two of 255 by 127 would pass. The
+    /// inputs are quantized to as many levels for it ([`quantized::Rows`]).
+    #[must_use]
+    pub const fn input_max(self) -> f32 {
+        match self {
+            Self::Avx2 => 127.0,
+            Self::Portable | Self::AvxVnni | Self::Avx512Vnni | Self::Dotprod => 255.0,
         }
     }
 

@@ -7,7 +7,7 @@
 // (LICENSES/GPL-3.0-or-later.txt).
 
 //! The kernels in assembly for x86-64 (`asm/x86_64/`), declared, and the safe
-//! functions that call them: each checks, in every build, what its kernel reads
+//! function that calls them: it checks, in every build, what its kernel reads
 //! and writes and that the processor has the kernel's extensions, then makes the
 //! call, the one unsafe operation of its block.
 #![allow(
@@ -18,7 +18,7 @@
 use crate::quantized::{GROUP, GROUP_BYTES, PANEL};
 
 /// A kernel of the products in integers for a number of rows
-/// (`qgemm_avx_vnni.S`).
+/// (`qgemm_avx2.S`, `qgemm_avx_vnni.S`, `qgemm_avx512_vnni.S`).
 type Qgemm = unsafe extern "sysv64" fn(
     groups: usize,
     a: *const u8,
@@ -29,6 +29,54 @@ type Qgemm = unsafe extern "sysv64" fn(
 );
 
 unsafe extern "sysv64" {
+    fn kiral_qgemm_avx2_1(
+        groups: usize,
+        a: *const u8,
+        a_stride: usize,
+        a_floats: *const f32,
+        b: *const u8,
+        c: *mut f32,
+    );
+    fn kiral_qgemm_avx2_2(
+        groups: usize,
+        a: *const u8,
+        a_stride: usize,
+        a_floats: *const f32,
+        b: *const u8,
+        c: *mut f32,
+    );
+    fn kiral_qgemm_avx2_3(
+        groups: usize,
+        a: *const u8,
+        a_stride: usize,
+        a_floats: *const f32,
+        b: *const u8,
+        c: *mut f32,
+    );
+    fn kiral_qgemm_avx2_4(
+        groups: usize,
+        a: *const u8,
+        a_stride: usize,
+        a_floats: *const f32,
+        b: *const u8,
+        c: *mut f32,
+    );
+    fn kiral_qgemm_avx2_5(
+        groups: usize,
+        a: *const u8,
+        a_stride: usize,
+        a_floats: *const f32,
+        b: *const u8,
+        c: *mut f32,
+    );
+    fn kiral_qgemm_avx2_6(
+        groups: usize,
+        a: *const u8,
+        a_stride: usize,
+        a_floats: *const f32,
+        b: *const u8,
+        c: *mut f32,
+    );
     fn kiral_qgemm_avxvnni_1(
         groups: usize,
         a: *const u8,
@@ -77,47 +125,140 @@ unsafe extern "sysv64" {
         b: *const u8,
         c: *mut f32,
     );
+    fn kiral_qgemm_avx512vnni_1(
+        groups: usize,
+        a: *const u8,
+        a_stride: usize,
+        a_floats: *const f32,
+        b: *const u8,
+        c: *mut f32,
+    );
+    fn kiral_qgemm_avx512vnni_2(
+        groups: usize,
+        a: *const u8,
+        a_stride: usize,
+        a_floats: *const f32,
+        b: *const u8,
+        c: *mut f32,
+    );
+    fn kiral_qgemm_avx512vnni_3(
+        groups: usize,
+        a: *const u8,
+        a_stride: usize,
+        a_floats: *const f32,
+        b: *const u8,
+        c: *mut f32,
+    );
+    fn kiral_qgemm_avx512vnni_4(
+        groups: usize,
+        a: *const u8,
+        a_stride: usize,
+        a_floats: *const f32,
+        b: *const u8,
+        c: *mut f32,
+    );
+    fn kiral_qgemm_avx512vnni_5(
+        groups: usize,
+        a: *const u8,
+        a_stride: usize,
+        a_floats: *const f32,
+        b: *const u8,
+        c: *mut f32,
+    );
+    fn kiral_qgemm_avx512vnni_6(
+        groups: usize,
+        a: *const u8,
+        a_stride: usize,
+        a_floats: *const f32,
+        b: *const u8,
+        c: *mut f32,
+    );
 }
 
-/// The rows a tile of the AVX-VNNI kernels takes at most.
-pub(crate) const AVX_VNNI_ROWS: usize = 6;
+/// The rows a tile of the kernels takes at most, of every form of x86-64.
+pub(crate) const TILE_ROWS: usize = 6;
 
-/// The kernels by their number of rows, from one.
-const AVX_VNNI: [Qgemm; AVX_VNNI_ROWS] = [
-    kiral_qgemm_avxvnni_1,
-    kiral_qgemm_avxvnni_2,
-    kiral_qgemm_avxvnni_3,
-    kiral_qgemm_avxvnni_4,
-    kiral_qgemm_avxvnni_5,
-    kiral_qgemm_avxvnni_6,
-];
+/// The kernels of the products in integers of x86-64, by their form.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Products {
+    /// AVX2 without VNNI, on inputs of seven bits.
+    Avx2,
+    /// AVX-VNNI.
+    AvxVnni,
+    /// AVX-512 with VNNI.
+    Avx512Vnni,
+}
 
-/// Whether the processor has what the AVX-VNNI kernels run: AVX2, FMA and
-/// AVX-VNNI, as std reports them (once, then from its cache).
-pub(crate) fn has_avx_vnni() -> bool {
-    std::arch::is_x86_feature_detected!("avx2")
-        && std::arch::is_x86_feature_detected!("fma")
-        && std::arch::is_x86_feature_detected!("avxvnni")
+impl Products {
+    /// The kernels by their number of rows, from one.
+    fn kernels(self) -> [Qgemm; TILE_ROWS] {
+        match self {
+            Self::Avx2 => [
+                kiral_qgemm_avx2_1,
+                kiral_qgemm_avx2_2,
+                kiral_qgemm_avx2_3,
+                kiral_qgemm_avx2_4,
+                kiral_qgemm_avx2_5,
+                kiral_qgemm_avx2_6,
+            ],
+            Self::AvxVnni => [
+                kiral_qgemm_avxvnni_1,
+                kiral_qgemm_avxvnni_2,
+                kiral_qgemm_avxvnni_3,
+                kiral_qgemm_avxvnni_4,
+                kiral_qgemm_avxvnni_5,
+                kiral_qgemm_avxvnni_6,
+            ],
+            Self::Avx512Vnni => [
+                kiral_qgemm_avx512vnni_1,
+                kiral_qgemm_avx512vnni_2,
+                kiral_qgemm_avx512vnni_3,
+                kiral_qgemm_avx512vnni_4,
+                kiral_qgemm_avx512vnni_5,
+                kiral_qgemm_avx512vnni_6,
+            ],
+        }
+    }
+
+    /// Whether the processor has what the kernels run, as std reports it (once,
+    /// then from its cache): AVX2 and FMA, and AVX-VNNI, or AVX-512 F, BW, VL
+    /// and VNNI.
+    fn runs(self) -> bool {
+        use std::arch::is_x86_feature_detected;
+        let avx2 = is_x86_feature_detected!("avx2") && is_x86_feature_detected!("fma");
+        avx2 && match self {
+            Self::Avx2 => true,
+            Self::AvxVnni => is_x86_feature_detected!("avxvnni"),
+            Self::Avx512Vnni => {
+                is_x86_feature_detected!("avx512f")
+                    && is_x86_feature_detected!("avx512bw")
+                    && is_x86_feature_detected!("avx512vl")
+                    && is_x86_feature_detected!("avx512vnni")
+            }
+        }
+    }
 }
 
 /// Adds to the first `rows` rows of `tile` their products with `groups` groups
-/// of a panel, by the AVX-VNNI kernel of that many rows: `a` the rows' bytes,
+/// of a panel, by the kernel of that many rows of a form: `a` the rows' bytes,
 /// `groups` groups of 64 each, `a_floats` each group's scale and offset, row by
 /// row, and `panel` the panel's groups, of [`GROUP_BYTES`].
 ///
 /// # Panics
 ///
-/// Where `rows` is not 1 to 6, `groups` is 0, the slices are shorter than the
-/// rows and groups they are said to hold, or the processor lacks AVX-VNNI.
-pub(crate) fn qgemm_avx_vnni(
+/// Where `rows` is not 1 to [`TILE_ROWS`], `groups` is 0, the slices are
+/// shorter than the rows and groups they are said to hold, or the processor
+/// lacks the form's extensions.
+pub(crate) fn qgemm(
+    products: Products,
     rows: usize,
     groups: usize,
     a: &[u8],
     a_floats: &[f32],
     panel: &[u8],
-    tile: &mut [[f32; PANEL]; AVX_VNNI_ROWS],
+    tile: &mut [[f32; PANEL]; TILE_ROWS],
 ) {
-    assert!((1..=AVX_VNNI_ROWS).contains(&rows), "a tile of {rows} rows");
+    assert!((1..=TILE_ROWS).contains(&rows), "a tile of {rows} rows");
     assert!(groups > 0, "products of no groups");
     let a_stride = groups * GROUP;
     assert!(
@@ -132,16 +273,21 @@ pub(crate) fn qgemm_avx_vnni(
         panel.len() >= groups * GROUP_BYTES,
         "a panel shorter than {groups} groups"
     );
-    assert!(has_avx_vnni(), "the AVX-VNNI kernels on a processor without AVX-VNNI");
-    let kernel = AVX_VNNI[rows - 1];
-    // SAFETY: checked above: the processor has AVX2, FMA and AVX-VNNI, which the
-    // kernel executes; it reads `rows` rows of `a_stride` bytes from `a`, which
-    // holds at least that many, the rows' `2 * groups` floats each, 8 bytes a
-    // group, from `a_floats`, which holds them, and `groups` groups of
-    // `GROUP_BYTES` from `panel`, which holds them; it reads and writes `rows`
-    // rows of `PANEL` floats, 64 bytes apart, of `tile`, which has six. It
-    // keeps to System V's convention, as declared, touches only registers the
-    // caller saves, leaves rsp alone, and keeps no pointer after it returns.
+    assert!(
+        products.runs(),
+        "the {products:?} kernels on a processor without its extensions"
+    );
+    let kernel = products.kernels()[rows - 1];
+    // SAFETY: checked above: the processor has the extensions the form's kernel
+    // executes (AVX2 and FMA, with AVX-VNNI or AVX-512 F, BW, VL and VNNI for
+    // theirs); it reads `rows` rows of `a_stride` bytes from `a`, which holds
+    // at least that many, the rows' `2 * groups` floats each, 8 bytes a group,
+    // from `a_floats`, which holds them, and `groups` groups of `GROUP_BYTES`
+    // from `panel`, which holds them, and AVX2's 32 bytes of its own
+    // constants; it reads and writes `rows` rows of `PANEL` floats, 64 bytes
+    // apart, of `tile`, which has six. It keeps to System V's convention, as
+    // declared, touches only registers the caller saves, leaves rsp alone, and
+    // keeps no pointer after it returns.
     unsafe {
         kernel(
             groups,
