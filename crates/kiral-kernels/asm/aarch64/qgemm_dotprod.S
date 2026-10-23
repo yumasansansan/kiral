@@ -49,9 +49,11 @@
 // of v8, which the convention has the callee keep, put back before returning.
 // x18 is not touched, nor sp.
 //
-// Not measured here: the i7-1360P this was written on runs no AArch64; the
-// CI's runners of macOS run its tests and measure it (kiral-tools bench
-// kernels).
+// Measured by the CI with kiral-tools bench kernels on zenz's five layers,
+// unpinned, its clock not read, on the Apple M1 (virtual) of a runner of macOS
+// (2026-10-23): 96 to 125 GMAC/s with 4 to 40 rows and 54 to 63 with one,
+// against the portable form's 3.3 to 5.1; its tests passed there. The
+// i7-1360P this was written on runs no AArch64.
 //
 // Assembled by Clang.
 

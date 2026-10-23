@@ -653,3 +653,11 @@ machine = "AMD EPYC 7763 64-Core Processor (Zen 3, AVX2 without VNNI), a GitHub 
 core = "unpinned"
 avx2 = { rows_1 = [48.9, 54.4], rows_4_to_40 = [78.9, 84.4] }
 portable = { any_rows = [6.6, 6.8] }
+
+[[kernels]]
+system = "the products in integers of zenz's layers, weights of 8 bits; GMAC/s, the least and the greatest over the five layers"
+source = "kiral-tools bench kernels --rows 1,4,16,40, 2026-10-23, the CI's rust job on a runner of macOS (macos-26), one run, unpinned, the clock not read"
+machine = "Apple M1 (Virtual), a GitHub runner"
+core = "unpinned"
+dotprod = { rows_1 = [54.3, 62.6], rows_4_to_40 = [95.6, 124.8] }
+portable = { any_rows = [3.3, 5.1] }
