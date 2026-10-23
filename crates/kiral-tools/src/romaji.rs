@@ -274,6 +274,37 @@ mod tests {
     }
 
     #[test]
+    fn the_keys_compose_back_into_the_preedit() {
+        // KIRAL's own composition, Mozc's table as well, types the keys back.
+        for reading in [
+            "カケイヲタスケルタメ、",
+            "ガッコウ",
+            "キッチン",
+            "アッ。",
+            "ヨッン",
+            "ジェット",
+            "キャンセル",
+            "フィードバック",
+            "デュエット・トゥ",
+            "「…『（）』」",
+            "ァャ",
+            "ンアンヤンナ",
+            "ヴァイオリン",
+            "ウォーター",
+            "シンブン",
+            "コンニチハ",
+            "ヵヶ",
+        ] {
+            let mut composer = kiral_engine::romaji::Composer::new();
+            for key in keys(reading).expect("keys").chars() {
+                composer.push(key);
+            }
+            composer.flush();
+            assert_eq!(composer.preedit(), preedit(reading), "{reading}");
+        }
+    }
+
+    #[test]
     fn the_preedit_is_the_reading_in_hiragana() {
         assert_eq!(preedit("カケイヲ、「ヴ」ー…"), "かけいを、「ゔ」ー…");
         assert_eq!(preedit("ヵヶ"), "ヵヶ");

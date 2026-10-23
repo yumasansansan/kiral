@@ -3,6 +3,18 @@
 version = 4
 
 [[package]]
+name = "kiral-capi"
+version = "0.1.0"
+dependencies = [
+ "kiral-dict",
+ "kiral-engine",
+ "kiral-kernels",
+ "kiral-model",
+ "kiral-nn",
+ "kiral-sys",
+]
+
+[[package]]
 name = "kiral-cpu"
 version = "0.1.0"
 

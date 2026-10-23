@@ -14,7 +14,14 @@
 //! - [`engine`]: the reading drafted on the input thread, which never waits for
 //!   the model, and refined on a worker, a round a key, the results of a
 //!   reading that has changed since dropped.
+//! - [`romaji`]: keys composed into kana, as Mozc's default romaji table
+//!   composes them.
+//! - [`session`]: what a frontend's input context types into -- the keys
+//!   composed, drafted and refined as they are typed, converted and committed
+//!   -- and the engine its sessions share, which owns its files and its worker.
 #![forbid(unsafe_code)]
 
 pub mod engine;
 pub mod refine;
+pub mod romaji;
+pub mod session;

@@ -120,6 +120,22 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
   モデルが動いている間も，入力スレッドでのキーの処理は 99 パーセンタイルで 2 ms に収まり，AC 電源の P コアでは 0.5 ms に収まります．zenz のプロンプトは読みを変換の前に置くので，キーの精緻化は読みの新しいかな，その後のタグ，下書き全体をモデルに与え直します．AC 電源の P コアでは中央値 12.5〜12.8 ms で届き（目標の 15 ms 以内で，すべて次のキーより前に届きます．GELU と softmax が KIRAL 自身の指数関数を使う前は，交互に測って 15.7〜16.3 ms），キーの合間のクロックが低いバッテリー駆動ではその約 3 倍かかります．同じ 50 項目を締め切りなしで変換すると 43 項目が正解で，AC 電源の P コアで Space が示すのもその 43 項目です．キーの間の時間を置かずに続けて測ると（`kiral-tools bench keys`），キーの精緻化はモデルに平均 19.8 トークンを与え，中央値で P コア（CPU 0，4.1〜4.2 GHz）は 12.2〜12.3 ms，E コア（CPU 8，3.70 GHz）は 38.0〜40.7 ms かかります．そのトークンは重みの読み込みではなく積の計算で決まるので，下書きをいくつも一緒に与えると，それぞれのトークンがどのキーにも加わり，下書きを分けて与えると往復が増えます．そこで下書きは 1 つを丸ごと与えます．
 
+- KIRAL のセッション（`kiral_engine::session`）と C ABI（`kiral-capi`）：フロントエンドが打ち込む先です．キーは Mozc の標準のローマ字表のとおりにかなに合成します（`kiral_engine::romaji`）．表の規則はキーをかなにし，打ち直すキーを残すことがあります（`kk` は っ を作り `k` を残します）．より長い規則がそのキーで始まる間はキーを待たせ，大文字とその後のキーは打ったまま取ります（`iPhone` は いPhone）．Mozc 2.29 にそのヘルパーを通して専用のプロファイルで打ち込み，小文字 3 文字までのすべての列，子音 3 つと母音の列，ASCII のその他の印字可能な文字の単独と `z` の後のもの，計 64,719 通りがすべて同じに合成されることを確かめました．AJIMEE-Bench のすべての読みも，`replay --mozc` が Mozc に打つキーから元どおりに合成されます．セッションは打つそばから変換を表示します．かなの辞書による下書きをすぐに，モデルの精緻化が届けばそれに置き換えて，その後に待っているキーを全角で表示します．Space は読み全体の精緻化を最大 30 ms 待って変換し，変換の後ろに候補（辞書自身の変換，ひらがな，カタカナ）を持ちます．もう一度の Space，Down，Up で候補を送りつつ一覧を表示し，一覧の表示中は数字で選べます．Enter は表示中のものを確定し，変換中に文字を打つとその変換を確定して次を始めます．Backspace は 1 文字を消すか変換から戻り，Escape も変換から戻ります．F6 と F7 はひらがなとカタカナにします．確定した文字列は，フロントエンドがカーソルの前の文字列を与えない限り，次の変換の左文脈になります．エンジンはファイルをマップして自分で持ちます．辞書は一度だけ検査し，キーごとに読み直します（`kiral_dict::Checked`）．読み直しは P コア（CPU 0，4.9 GHz）で中央値 21 ns，各読みの始まりをすべて検査する parse では 0.42 ms かかります．モデルはワーカーのスレッドで読み，ワーカーはセッションの精緻化を返すとそのセッションの起床通知を呼びます．モデルがなければ下書きだけを表示します．C ABI のヘッダー（`crates/kiral-capi/include/kiral.h`）は C23 と C++ 向けに，まず Fcitx 5 のアドオンのためにエンジンとセッションを宣言し，このクレートの静的ライブラリがその実体を持ちます．テストでは，ヘッダーを Clang のすべての警告を有効にして C23 と C++26 としてコンパイルし，ヘッダーを通して打ち込みます．ローマ字で打ち込んだとき（`kiral-tools replay --romaji`，i7-1360P，AC 電源，2 回ずつ），辞書だけでキーを間を置かずに打つと：
+
+  | 辞書だけ，10,151 キー | キー p50 | p99 | Space p50 | p99 | Space の Acc@1 |
+  | --- | ---: | ---: | ---: | ---: | ---: |
+  | P コア（CPU 0，クロックの中央値 4.57〜4.62 GHz） | 0.008 ms | 0.246〜0.259 ms | 0.050〜0.054 ms | 0.295〜0.319 ms | 53.5 |
+  | E コア（CPU 8，クロックの中央値 3.70 GHz） | 0.011 ms | 0.337〜0.342 ms | 0.083〜0.086 ms | 0.409 ms | 53.5 |
+
+  エンジンに最初の 50 項目を 100 ms ごとに 1 キー打ち込み，ワーカーを同じ種類の別のコアに置くと：
+
+  | エンジン，2,526 キー | キー p50 | p99 | 精緻化 p50 | p99 | 次のキーまでに届いた精緻化 | Space が締め切り内に精緻化 | Space の Acc@1 |
+  | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+  | P コア（入力は CPU 0，ワーカーは CPU 2） | 0.042〜0.044 ms | 0.45〜0.48 ms | 11.8〜12.1 ms | 38.7〜41.6 ms | 1385 のうち 1385 | 50 のうち 50 | 86.0 |
+  | E コア（CPU 8，ワーカーは CPU 9） | 0.047〜0.048 ms | 0.66 ms | 36.4〜37.2 ms | 96.9〜97.0 ms | 1385 のうち 1272〜1289 | 50 のうち 42 | 82.0〜84.0 |
+
+  クロックは 20 ms ごとに読みますが，その多くはコアが眠っているキーの間に読んだものです（CPU 0 の中央値は 1.16〜1.34 GHz，ワーカーの CPU 2 は 1.64〜2.00，CPU 8 は 0.40〜2.01，CPU 9 は 0.40〜3.12）．計測の始めのパッケージの温度は 85 °C と 88 °C でした．かなを完成させないキーは数マイクロ秒で済みます．モデルが働いている間も，P コアでの入力スレッドのキーの処理は 99 パーセンタイルで 0.5 ms を下回り，かなをまるごと打っていたとき（0.45〜0.47 ms）と変わりません．精緻化はキーから中央値 11.8〜12.1 ms で届き，どれも次のキーより前です．Space は 50 項目中 43 を正しく表示し，これはエンジンが締め切りなしで正しく変換する 43 項目と同じです．
+
 - 単精度のカーネル（`kiral-kernels`）：パネルにパックした重みによる線形層，LayerNorm，GELU，softmax，キャッシュに対する attention を，コンパイラがベクトル化するシンプルな Rust で書いています．どれも倍精度と比べてテストし，誤差を丸めの解析から導いた上界に収めています．長さはベクトルの幅の倍数でないものを使います．GELU と softmax が使う指数関数もここで計算します（引数から最も近い ln 2 の倍数を引き，残りを Cephes の多項式で求め，2 の冪は指数部のビットに置きます）．値域のすべての浮動小数点数で倍精度との差は 1.42 u 以内（u = 2^-24）で，これらのループもベクトル化されます．システムのライブラリから 1 値ずつ取っていたときは，GELU の tanh が P コアでのキーの精緻化の 6 分の 1 を占めていました．GELU は `x (1 + tanh z) / 2` と等しい `x / (1 + exp(-2z))` として計算します．整数の積の入力は比較と 2^23 の加算（これが丸めになります）で量子化し，`round_ties_even` と飽和する変換で丸めていたときの 3 分の 1 の時間で同じバイトになります．それぞれ `kiral-tools bench kernels` で測れます．
 - AVX-VNNI のアセンブリによる整数の積（`crates/kiral-kernels/asm/x86_64/qgemm_avx_vnni.S`）．最初のアセンブリの形です．1〜6 行×16 列のタイルで，`vpdpbusd` がバイトの積 4 つを 1 レーンに足します．3 行以下では和を 2 組に分け，2 倍の連鎖を並べて走らせます．可搬な形と同じく行数ごとに倍精度と比べてテストし，プロセッサが AVX-VNNI を持ち環境が許すところで使います．出力層では，各行はタイルが来るたびに最大の和だけを残し（`quantized::likeliest`），6000 語のロジットは書き出しません．検証が使うのはそれだけだからです．16〜40 行で，i7-1360P の P コアで 179〜205 GMAC/s（可搬な形は 8〜10），E コアで 46〜48（可搬な形は 6.3〜6.7）です（`kiral-tools bench kernels`）．
 - VNNI のない AVX2 向けの積（`qgemm_avx2.S`）．AVX-VNNI や AVX-512 の VNNI より前のプロセッサ（Haswell〜Comet Lake，Zen〜Zen 3）のための形です．`vpmaddubsw` は入力のバイトと重みのバイトの積 2 つを 16 ビットに足しますが，255×127 が 2 つでは溢れるので，この形では入力を 7 ビットに量子化し，重みは 8 ビットのままにします（どの形にもモデルファイルは 1 つで，マップしたまま使えます）．`vpmaddwd` で 1 を掛けて，`vpdpbusd` と同じ 32 ビットのレーンにまとめます．16 行か 40 行で，i7-1360P の P コアで 102〜111 GMAC/s，E コアで 23〜26 で，AVX-VNNI の 0.55 倍です（可搬な形は 8〜9 と 6.4〜6.7）．本来の対象のプロセッサである CI のランナーの AMD EPYC 7763（Zen 3）では，4〜40 行で 79〜84 です（可搬な形は 6.6〜6.8．固定なし）．入力を 7 ビットにすると，zenz-v3.1-small は AJIMEE-Bench で 1 項目を失い（Acc@1 86.5，CER 1.60．単精度との一致は 8 ビットと同じく 4396 位置のうち 4395），エンジンも同じ 1 項目を失います（往復の上限なしで 86.0）．同じマシンでこの形に抑えると（`KIRAL_ISA=avx2`），打ちながらの精緻化は P コアで中央値 17.5〜18.1 ms で届き，すべて次のキーより前です（AVX-VNNI では 12.5〜12.8 ms）．
@@ -142,7 +158,7 @@ cargo build --release --locked
 bash ci/rust.sh
 ```
 
-`ci/rust.sh` はレイアウトと clippy（警告はすべてエラー）を検査し，dev と release の両プロファイルでテストを実行します．`bash ci/targets.sh test` は x86-64-v3 向けと，512 ビット幅のベクトルの x86-64-v4 向けにワークスペースをビルドし，プロセッサが対応していればそれぞれテストします．`bash ci/emulated.sh <sde64>` は，[Intel SDE](https://www.intel.com/content/www/us/en/developer/articles/tool/software-development-emulator.html) の下で Nehalem から Arrow Lake までのプロセッサとしてテストを実行します．
+`ci/rust.sh` はレイアウトと clippy（警告はすべてエラー）を検査し，dev と release の両プロファイルでテストを実行します．ビルドは KIRAL の C ABI を静的ライブラリ `target/release/libkiral_capi.a`（Windows では `kiral_capi.lib`）に残し，`crates/kiral-capi/include/kiral.h` がそれを宣言します．`bash ci/targets.sh test` は x86-64-v3 向けと，512 ビット幅のベクトルの x86-64-v4 向けにワークスペースをビルドし，プロセッサが対応していればそれぞれテストします．`bash ci/emulated.sh <sde64>` は，[Intel SDE](https://www.intel.com/content/www/us/en/developer/articles/tool/software-development-emulator.html) の下で Nehalem から Arrow Lake までのプロセッサとしてテストを実行します．
 
 ## 計測
 
@@ -199,11 +215,19 @@ cargo run --release --locked -p kiral-tools -- replay --dict data/dictionaries/m
 ```
 
 ```bash
+cargo run --release --locked -p kiral-tools -- replay --dict data/dictionaries/mozc-sudachi.kdic --romaji --cpu p0 --cpu e0
+```
+
+```bash
 cargo run --release --locked -p kiral-tools -- eval --model data/models/zenz-v3.1-small-int8.kmdl --dict data/dictionaries/mozc-sudachi.kdic
 ```
 
 ```bash
 cargo run --release --locked -p kiral-tools -- replay --model data/models/zenz-v3.1-small-int8.kmdl --dict data/dictionaries/mozc-sudachi.kdic --limit 50 --cpu p0:p2 --cpu e0:e1
+```
+
+```bash
+cargo run --release --locked -p kiral-tools -- replay --model data/models/zenz-v3.1-small-int8.kmdl --dict data/dictionaries/mozc-sudachi.kdic --romaji --limit 50 --cpu p0:p2 --cpu e0:e1
 ```
 
 ```bash
@@ -218,7 +242,7 @@ cargo run --release --locked -p kiral-tools -- eval --mozc
 cargo run --release --locked -p kiral-tools -- replay --mozc --cpu p0 --cpu e0
 ```
 
-このスクリプトは AJIMEE-Bench，zenz-v3.1-small，Mozc の辞書，SudachiDict を固定のリビジョンから `data/`（コミットしない）に取得し，`scripts/datasets.sha256` に記録した SHA-256 と照合します．`list` で取得元と利用条件を表示します．`eval` は `--model` と `--dict` を両方与えると KIRAL のエンジンで変換し（往復の上限は `--rounds`，標準で 8），`replay` は両方を与えるとエンジンに打ち込みます．ワーカーはコロンの後のプロセッサに固定します（i7-1360P では `p0` が CPU 0，`p2` が別のコアの CPU 2 で，`p1` は CPU 0 のもう一つのスレッドです）．`bench keys` はエンジンによる各キーの精緻化を，キーの間の時間を置かずに続けて測ります（クロックは安定します）．`model convert` は整数の zenz を `data/models/` に書き出します．`--source` は重みの出所で，ファイルの表示に入ります．`--model` は zenz のディレクトリを受け取るところならどこでもこのファイルを受け取ります（`agree` では `--quantized`）．`dict build` は，`--sudachi` なしでは Mozc の辞書だけで，`--lists small_lex.csv,core_lex.csv,notcore_lex.csv` では SudachiDict のすべてのリストを加えて作ります．各実行の結果は `bench/results/` に保存し，比較の基準となる数値は `bench/baselines.toml` にあります．Mozc の計測は Linux で，ヘルパーのためにパッケージ `emacs-mozc-bin` を入れて行います．
+このスクリプトは AJIMEE-Bench，zenz-v3.1-small，Mozc の辞書，SudachiDict を固定のリビジョンから `data/`（コミットしない）に取得し，`scripts/datasets.sha256` に記録した SHA-256 と照合します．`list` で取得元と利用条件を表示します．`eval` は `--model` と `--dict` を両方与えると KIRAL のエンジンで変換し（往復の上限は `--rounds`，標準で 8），`replay` は両方を与えるとエンジンに打ち込みます．ワーカーはコロンの後のプロセッサに固定します（i7-1360P では `p0` が CPU 0，`p2` が別のコアの CPU 2 で，`p1` は CPU 0 のもう一つのスレッドです）．`replay --romaji` はフロントエンドと同じように読みをローマ字で KIRAL のセッションに打ち込みます．モデルがあれば `--interval` ごとに 1 キー，辞書だけなら間を置かずに打ちます．`bench keys` はエンジンによる各キーの精緻化を，キーの間の時間を置かずに続けて測ります（クロックは安定します）．`model convert` は整数の zenz を `data/models/` に書き出します．`--source` は重みの出所で，ファイルの表示に入ります．`--model` は zenz のディレクトリを受け取るところならどこでもこのファイルを受け取ります（`agree` では `--quantized`）．`dict build` は，`--sudachi` なしでは Mozc の辞書だけで，`--lists small_lex.csv,core_lex.csv,notcore_lex.csv` では SudachiDict のすべてのリストを加えて作ります．各実行の結果は `bench/results/` に保存し，比較の基準となる数値は `bench/baselines.toml` にあります．Mozc の計測は Linux で，ヘルパーのためにパッケージ `emacs-mozc-bin` を入れて行います．
 
 ## ライセンス
 

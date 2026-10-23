@@ -10,13 +10,15 @@
 //! under its reading, cheapest first, the words given twice once, and the
 //! readings that begin an input are those a plain search of the words finds.
 //! And the file's parser takes any bytes: a file changed at random is read or
-//! refused, and looked up, never a panic.
+//! refused, and looked up, never a panic. Bytes checked and kept give the
+//! dictionary their parse gives, and none once they change.
 
+use std::cell::Cell;
 use std::collections::BTreeMap;
 
 use kiral_dict::file::{Unknown, build};
 use kiral_dict::mozc::{Matrix, SPELLING_CORRECTION};
-use kiral_dict::{Dictionary, Metadata, Word, normalize};
+use kiral_dict::{Checked, Dictionary, Metadata, Word, normalize};
 
 /// `SplitMix64`: a fixed stream of numbers, the same on every system.
 struct Random(u64);
@@ -168,6 +170,53 @@ fn words_come_back_under_their_readings() {
             .collect();
         assert_eq!(found, plain, "{input:?}");
     }
+}
+
+/// Bytes that shrink after they are read once: what a mapped file must not do.
+struct Shrinking {
+    bytes: Vec<u8>,
+    read: Cell<bool>,
+}
+
+impl AsRef<[u8]> for Shrinking {
+    fn as_ref(&self) -> &[u8] {
+        if self.read.replace(true) {
+            &self.bytes[..self.bytes.len() / 2]
+        } else {
+            &self.bytes
+        }
+    }
+}
+
+#[test]
+fn bytes_checked_and_kept_give_their_dictionary() {
+    let mut random = Random(34);
+    let ids = 7;
+    let words = words(&mut random, 500, ids);
+    let bytes = build(&words, &matrix(&mut random, ids), UNKNOWN, &METADATA).expect("a dictionary");
+    let checked = Checked::new(bytes.clone()).expect("a dictionary");
+    let dictionary = checked.dictionary();
+    let parsed = Dictionary::parse(&bytes).expect("a dictionary");
+    assert_eq!(dictionary.metadata(), METADATA);
+    assert_eq!(dictionary.entries(), parsed.entries());
+    for (reading, entries) in &expected(&words) {
+        assert_eq!(
+            &entries_of(dictionary.lookup(reading).expect("a reading built in")),
+            entries,
+            "{reading}"
+        );
+    }
+    assert!(Checked::new(bytes[..bytes.len() - 1].to_vec()).is_err());
+    let shrinking = Checked::new(Shrinking {
+        bytes,
+        read: Cell::new(false),
+    })
+    .expect("a dictionary, as first read");
+    let changed = shrinking.dictionary();
+    assert_eq!(changed.entries(), 0);
+    assert!(words.iter().all(|word| changed.lookup(&word.reading).is_none()));
+    assert_eq!(changed.metadata().name, "");
+    assert_eq!(changed.connection(1, 1), u16::MAX);
 }
 
 #[test]

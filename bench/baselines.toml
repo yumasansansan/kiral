@@ -17,7 +17,9 @@
 # the median and the 99th percentile, by the nearest rank, on one pinned core,
 # with the median of the clock read while it ran. For KIRAL's engine, a kana
 # every 100 ms, it keeps besides the time from a key to its refinement, of the
-# keys whose refinement came before the next, and the worker's core and clock.
+# keys whose refinement came before the next, and the worker's core and clock;
+# through its sessions, a key typed in romaji every 100 ms, the refinements are
+# those of the keys that changed the reading, `of` them.
 #
 # `kernels` keeps the multiply-adds a second, in billions, of the products in
 # integers of zenz's five layers (`kiral-tools bench kernels`), their weights in
@@ -280,6 +282,22 @@ kana = { count = 5820, p50 = [0.062, 0.065, 0.063, 0.064, 0.063, 0.062], p99 = [
 conversions = { count = 200, p50 = [0.083, 0.088, 0.083, 0.084, 0.086, 0.085], p99 = [0.412, 0.417, 0.409, 0.473, 0.41, 0.413] }
 
 [[replay]]
+system = "KIRAL's sessions, the dictionary alone (mozc-sudachi): AJIMEE-Bench's readings typed in romaji into a session, back to back, each key composed into kana and the kana drafted; Space converts"
+source = "kiral-tools replay --dict --romaji, 2026-10-23, two runs on AC power (energy preference performance)"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "P, CPU 0, pinned, 4.57 and 4.62 GHz at the median"
+keys = { count = 10151, p50 = [0.008, 0.008], p99 = [0.259, 0.246] }
+conversions = { count = 200, p50 = [0.054, 0.05], p99 = [0.319, 0.295], correct = [107, 107] }
+
+[[replay]]
+system = "KIRAL's sessions, the dictionary alone (mozc-sudachi): AJIMEE-Bench's readings typed in romaji into a session, back to back, each key composed into kana and the kana drafted; Space converts"
+source = "kiral-tools replay --dict --romaji, 2026-10-23, two runs on AC power (energy preference performance)"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "E, CPU 8, pinned, 3.70 GHz at the median"
+keys = { count = 10151, p50 = [0.011, 0.011], p99 = [0.342, 0.337] }
+conversions = { count = 200, p50 = [0.086, 0.083], p99 = [0.409, 0.409], correct = [107, 107] }
+
+[[replay]]
 system = "Mozc 2.28 (Ubuntu 24.04), conversions only, its IPC included"
 source = "earlier"
 conversions = { p50 = 2.1 }
@@ -301,6 +319,24 @@ core = "E, typing on CPU 8, 2.33 and 1.27 GHz at the median; the worker on CPU 9
 kana = { count = 1435, p50 = [0.205, 0.197], p99 = [0.721, 0.691] }
 refinements = { count = [1332, 1333], p50 = [36.722, 36.563], p99 = [96.736, 96.625] }
 conversions = { count = 50, refined = [42, 42], p50 = [0.645, 0.664], p99 = [30.145, 30.128], correct = [41, 41] }
+
+[[replay]]
+system = "KIRAL's sessions, the engine: AJIMEE-Bench's readings typed in romaji into a session, a key every 100 ms, each key composed and its kana drafted on the input thread and refined by zenz-v3.1-small in integers (its model file) on a worker, a round a key; Space waits 30 ms for up to 8 rounds"
+source = "kiral-tools replay --model --dict --romaji --limit 50, 2026-10-23, two runs on AC power (energy preference performance), the package at 85 and 88 C as the runs began; the clocks read mostly between keys, while the cores sleep"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "P, typing on CPU 0, 1.16 and 1.34 GHz at the median; the worker on CPU 2, pinned, 1.64 and 2.00 GHz at the median"
+keys = { count = 2526, p50 = [0.042, 0.044], p99 = [0.447, 0.48] }
+refinements = { count = [1385, 1385], of = 1385, p50 = [11.818, 12.113], p99 = [38.715, 41.616] }
+conversions = { count = 50, refined = [50, 50], p50 = [0.699, 0.659], p99 = [26.988, 27.114], correct = [43, 43] }
+
+[[replay]]
+system = "KIRAL's sessions, the engine: AJIMEE-Bench's readings typed in romaji into a session, a key every 100 ms, each key composed and its kana drafted on the input thread and refined by zenz-v3.1-small in integers (its model file) on a worker, a round a key; Space waits 30 ms for up to 8 rounds"
+source = "kiral-tools replay --model --dict --romaji --limit 50, 2026-10-23, two runs on AC power (energy preference performance), the package at 85 and 88 C as the runs began; the clocks read mostly between keys, while the cores sleep"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "E, typing on CPU 8, 0.40 and 2.01 GHz at the median; the worker on CPU 9, pinned, 0.40 and 3.12 GHz at the median"
+keys = { count = 2526, p50 = [0.047, 0.048], p99 = [0.657, 0.661] }
+refinements = { count = [1289, 1272], of = 1385, p50 = [36.386, 37.235], p99 = [96.904, 96.969] }
+conversions = { count = 50, refined = [42, 42], p50 = [0.908, 0.921], p99 = [30.665, 30.659], correct = [42, 41] }
 
 [[replay]]
 system = "KIRAL's engine: the dictionary's drafts (mozc-sudachi) refined by zenz-v3.1-small in integers (its model file) on a worker, a round a key, a kana every 100 ms; Space waits 30 ms for up to 8 rounds"

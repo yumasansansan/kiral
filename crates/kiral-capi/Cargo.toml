@@ -1,0 +1,33 @@
+# SPDX-FileCopyrightText: 2026 Yuma Kakei <yumasansansan@gmail.com>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# This file is part of KIRAL. The SPDX lines name its copyright holder and its
+# license, in the machine-readable form of the REUSE specification: the GNU
+# General Public License, version 3 or any later version
+# (LICENSES/GPL-3.0-or-later.txt).
+
+[package]
+name = "kiral-capi"
+description = "KIRAL's C ABI, for frontends reached from C or C++ (Fcitx 5's addon): engines and their sessions, and a hand-written C23 header"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[lib]
+crate-type = ["staticlib", "rlib"]
+
+[dependencies]
+kiral-engine = { path = "../kiral-engine" }
+kiral-sys = { path = "../kiral-sys" }
+
+[dev-dependencies]
+kiral-dict = { path = "../kiral-dict" }
+kiral-kernels = { path = "../kiral-kernels" }
+kiral-model = { path = "../kiral-model" }
+kiral-nn = { path = "../kiral-nn" }
+
+[lints]
+workspace = true

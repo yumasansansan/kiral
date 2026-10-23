@@ -148,6 +148,12 @@ impl Map {
     }
 }
 
+impl AsRef<[u8]> for Map {
+    fn as_ref(&self) -> &[u8] {
+        self.bytes()
+    }
+}
+
 impl Drop for Map {
     fn drop(&mut self) {
         if self.length == 0 {

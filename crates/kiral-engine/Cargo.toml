@@ -8,7 +8,7 @@
 
 [package]
 name = "kiral-engine"
-description = "KIRAL's engine: the dictionary's drafts verified by the model, on a worker the input thread never waits for"
+description = "KIRAL's engine: romaji composed into kana, the dictionary's drafts verified by the model on a worker the input thread never waits for, and the sessions frontends type into"
 version.workspace = true
 edition.workspace = true
 rust-version.workspace = true
@@ -19,12 +19,12 @@ publish.workspace = true
 [dependencies]
 kiral-dict = { path = "../kiral-dict" }
 kiral-lattice = { path = "../kiral-lattice" }
+kiral-model = { path = "../kiral-model" }
 kiral-nn = { path = "../kiral-nn" }
 kiral-sys = { path = "../kiral-sys" }
 
 [dev-dependencies]
 kiral-kernels = { path = "../kiral-kernels" }
-kiral-model = { path = "../kiral-model" }
 
 [lints]
 workspace = true
