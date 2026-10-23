@@ -18,7 +18,9 @@
 //! <directory>`, the nouns of SudachiDict's lists that Mozc's dictionary lacks
 //! are added in Mozc's classes ([`kiral_dict::sudachi`]), and SudachiDict's
 //! notices -- its Apache License, UniDic's BSD-3-Clause, NEologd's sources --
-//! go in the file too.
+//! go in the file too. Then the second words of compounds read voiced, which
+//! two compounds of the words or more attest, are added as words of their own
+//! ([`kiral_dict::rendaku`]).
 
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -26,7 +28,7 @@ use std::process::ExitCode;
 use std::time::Instant;
 
 use kiral_dict::file::{self, Unknown};
-use kiral_dict::{Dictionary, Metadata, mozc, sudachi};
+use kiral_dict::{Dictionary, Metadata, mozc, rendaku, sudachi};
 
 use crate::arguments;
 
@@ -39,8 +41,9 @@ as scripts/fetch_datasets.py fetch mozc-dictionary lays them out in
 data/mozc-dictionary/; with --sudachi, the nouns of SudachiDict's lists that
 Mozc's dictionary lacks are added, in Mozc's classes, from the files
 scripts/fetch_datasets.py fetch sudachi-dictionary lays out in
-data/sudachi-dictionary/. The file holds their notices and goes under their
-terms.
+data/sudachi-dictionary/. The second words of compounds read voiced -- 駆け,
+かけ, read がけ in 朝駆け -- are added where two compounds of the words or more
+attest it. The file holds their notices and goes under their terms.
 
   --mozc <directory>     Mozc's files
   --sudachi <directory>  SudachiDict's files
@@ -121,7 +124,8 @@ fn build(arguments: impl Iterator<Item = OsString>) -> Result<(), String> {
         (
             "mozc-sudachi",
             format!(
-                "Mozc's open-source dictionary (src/data/dictionary_oss), with the nouns of SudachiDict's {} it lacks",
+                "Mozc's open-source dictionary (src/data/dictionary_oss), with the nouns of SudachiDict's {} it lacks \
+                 and the voiced second words their compounds attest",
                 lists.join(", ")
             ),
             MOZC_SUDACHI_LICENSE,
@@ -130,11 +134,23 @@ fn build(arguments: impl Iterator<Item = OsString>) -> Result<(), String> {
     } else {
         (
             "mozc-oss",
-            "Mozc's open-source dictionary (src/data/dictionary_oss)".to_owned(),
+            "Mozc's open-source dictionary (src/data/dictionary_oss), with the voiced second words its compounds attest"
+                .to_owned(),
             MOZC_LICENSE,
             mozc.notice.clone(),
         )
     };
+    let suffix = mozc
+        .id_of(rendaku::SUFFIX_CLASS)
+        .ok_or_else(|| format!("id.def names no {}", rendaku::SUFFIX_CLASS))?;
+    let voiced = rendaku::voiced(&mozc.words, &mozc.parts_of_speech, suffix);
+    println!(
+        "rendaku: {} voiced second words attested by {} compounds or more, {} of them added",
+        voiced.attested,
+        rendaku::COMPOUNDS,
+        voiced.words.len()
+    );
+    mozc.words.extend(voiced.words);
     let read = started.elapsed();
     let name = options.text("name").unwrap_or_else(|| name.to_owned());
     let source = options.text("source").unwrap_or(source);

@@ -64,7 +64,7 @@ without_context = { accuracy = 91.0, cer = 0.69 }
 
 [[ajimee]]
 system = "KIRAL's engine: the dictionary's drafts (mozc-sudachi) verified by zenz-v3.1-small in integers (its model file), up to 1 round (--rounds 1)"
-source = "kiral-tools eval --model --dict, 2026-10-23, numbers of more than a digit made in the lattice"
+source = "kiral-tools eval --model --dict, 2026-10-23, numbers of more than a digit made in the lattice, and the voiced second words that its compounds attest in the dictionary (the same before them)"
 accuracy = 73.0
 cer = 3.53
 with_context = { accuracy = 69.0, cer = 4.48 }
@@ -72,7 +72,7 @@ without_context = { accuracy = 77.0, cer = 2.59 }
 
 [[ajimee]]
 system = "KIRAL's engine: the dictionary's drafts (mozc-sudachi) verified by zenz-v3.1-small in integers (its model file), up to 2 rounds (--rounds 2)"
-source = "kiral-tools eval --model --dict, 2026-10-23, numbers of more than a digit made in the lattice"
+source = "kiral-tools eval --model --dict, 2026-10-23, numbers of more than a digit made in the lattice, and the voiced second words that its compounds attest in the dictionary (the same before them)"
 accuracy = 82.5
 cer = 2.12
 with_context = { accuracy = 77.0, cer = 3.19 }
@@ -80,34 +80,34 @@ without_context = { accuracy = 88.0, cer = 1.05 }
 
 [[ajimee]]
 system = "KIRAL's engine: the dictionary's drafts (mozc-sudachi) verified by zenz-v3.1-small in integers (its model file), up to 3 rounds (--rounds 3)"
-source = "kiral-tools eval --model --dict, 2026-10-23, numbers of more than a digit made in the lattice"
-accuracy = 84.5
-cer = 1.81
-with_context = { accuracy = 79.0, cer = 2.83 }
+source = "kiral-tools eval --model --dict, 2026-10-23, numbers of more than a digit made in the lattice, and the voiced second words that its compounds attest in the dictionary (before them: 84.5 / 1.81, 1129 夜駆け wrong)"
+accuracy = 85.0
+cer = 1.79
+with_context = { accuracy = 80.0, cer = 2.80 }
 without_context = { accuracy = 90.0, cer = 0.79 }
 
 [[ajimee]]
 system = "KIRAL's engine: the dictionary's drafts (mozc-sudachi) verified by zenz-v3.1-small in integers (its model file), up to 4 rounds (--rounds 4)"
-source = "kiral-tools eval --model --dict, 2026-10-23, numbers of more than a digit made in the lattice"
-accuracy = 85.0
-cer = 1.64
-with_context = { accuracy = 80.0, cer = 2.53 }
+source = "kiral-tools eval --model --dict, 2026-10-23, numbers of more than a digit made in the lattice, and the voiced second words that its compounds attest in the dictionary (before them: 85.0 / 1.64, 1129 夜駆け wrong)"
+accuracy = 85.5
+cer = 1.62
+with_context = { accuracy = 81.0, cer = 2.49 }
 without_context = { accuracy = 90.0, cer = 0.75 }
 
 [[ajimee]]
 system = "KIRAL's engine: the dictionary's drafts (mozc-sudachi) verified by zenz-v3.1-small in integers (its model file), up to 8 rounds (--rounds 8)"
-source = "kiral-tools eval --model --dict, 2026-10-23, numbers of more than a digit made in the lattice"
-accuracy = 86.0
-cer = 1.68
-with_context = { accuracy = 81.0, cer = 2.66 }
+source = "kiral-tools eval --model --dict, 2026-10-23, numbers of more than a digit made in the lattice, and the voiced second words that its compounds attest in the dictionary (before them: 86.0 / 1.68, 1129 夜駆け wrong)"
+accuracy = 86.5
+cer = 1.66
+with_context = { accuracy = 82.0, cer = 2.62 }
 without_context = { accuracy = 91.0, cer = 0.69 }
 
 [[ajimee]]
 system = "KIRAL's engine: the dictionary's drafts (mozc-sudachi) verified by zenz-v3.1-small in integers (its model file), up to 16 rounds (--rounds 16), as with any more: 13 at most"
-source = "kiral-tools eval --model --dict, 2026-10-23, numbers of more than a digit made in the lattice"
-accuracy = 86.5
-cer = 1.53
-with_context = { accuracy = 82.0, cer = 2.37 }
+source = "kiral-tools eval --model --dict, 2026-10-23, numbers of more than a digit made in the lattice, and the voiced second words that its compounds attest in the dictionary (before them: 86.5 / 1.53, 1129 夜駆け wrong)"
+accuracy = 87.0
+cer = 1.51
+with_context = { accuracy = 83.0, cer = 2.33 }
 without_context = { accuracy = 91.0, cer = 0.69 }
 
 [[ajimee]]
@@ -143,31 +143,31 @@ with_context = { accuracy = 80.0, cer = 2.74 }
 without_context = { accuracy = 86.0, cer = 1.38 }
 
 [[ajimee]]
-system = "KIRAL's dictionary alone, built from Mozc's open-source dictionary (f183d4d3): Viterbi, no context"
-source = "kiral-tools eval --dict, 2026-10-23"
+system = "KIRAL's dictionary alone, built from Mozc's open-source dictionary (f183d4d3), and the voiced second words that their compounds attest: Viterbi, no context"
+source = "kiral-tools eval --dict, 2026-10-23, the same conversions before the voiced words, whose oracle was 98.0: 1129 and 1897 not reached"
 accuracy = 53.0
 cer = 6.55
 with_context = { accuracy = 49.0, cer = 8.46 }
 without_context = { accuracy = 57.0, cer = 4.64 }
-oracle = { words_alone = 98.0, with_characters_of_no_reading = 98.0 }
+oracle = { words_alone = 99.0, with_characters_of_no_reading = 99.0 }
 
 [[ajimee]]
-system = "KIRAL's dictionary alone, Mozc's (f183d4d3) and the nouns of SudachiDict's small and core lists (20261015) it lacks: Viterbi, no context"
-source = "kiral-tools eval --dict, 2026-10-23"
+system = "KIRAL's dictionary alone, Mozc's (f183d4d3) and the nouns of SudachiDict's small and core lists (20261015) it lacks, and the voiced second words that their compounds attest: Viterbi, no context"
+source = "kiral-tools eval --dict, 2026-10-23, the same conversions before the voiced words, whose oracle was 99.0: 1129 not reached"
 accuracy = 53.5
 cer = 6.46
 with_context = { accuracy = 50.0, cer = 8.28 }
 without_context = { accuracy = 57.0, cer = 4.64 }
-oracle = { words_alone = 99.0, with_characters_of_no_reading = 99.0 }
+oracle = { words_alone = 99.5, with_characters_of_no_reading = 99.5 }
 
 [[ajimee]]
-system = "KIRAL's dictionary alone, Mozc's (f183d4d3) and the nouns of all SudachiDict's lists (20261015) it lacks: Viterbi, no context"
-source = "kiral-tools eval --dict, 2026-10-23"
+system = "KIRAL's dictionary alone, Mozc's (f183d4d3) and the nouns of all SudachiDict's lists (20261015) it lacks, and the voiced second words that their compounds attest: Viterbi, no context"
+source = "kiral-tools eval --dict, 2026-10-23, the same conversions before the voiced words, whose oracle was 99.0: 1129 not reached"
 accuracy = 54.0
 cer = 6.24
 with_context = { accuracy = 49.0, cer = 8.02 }
 without_context = { accuracy = 59.0, cer = 4.46 }
-oracle = { words_alone = 99.0, with_characters_of_no_reading = 99.0 }
+oracle = { words_alone = 99.5, with_characters_of_no_reading = 99.5 }
 
 [[ajimee]]
 system = "Mozc 2.29.5160.102 (Ubuntu 26.10): typed in romaji, converted with Space, no context"
@@ -264,20 +264,20 @@ kana = { count = 5820, p50 = 0.046, p99 = 0.272 }
 conversions = { count = 200, p50 = 0.059, p99 = 0.302 }
 
 [[replay]]
-system = "KIRAL's dictionary alone (mozc-sudachi, SudachiDict's core nouns): a kana at a time, each prefix converted from its lattice up, numbers of more than a digit made in the lattice"
-source = "kiral-tools replay --dict, 2026-10-23, two runs on AC power in turn with the build before numbers (P 0.034 ms at the median, 0.232 and 0.248 at the 99th percentile; E 0.054 and 0.053, 0.330 and 0.328)"
+system = "KIRAL's dictionary alone (mozc-sudachi, SudachiDict's core nouns): a kana at a time, each prefix converted from its lattice up, numbers of more than a digit made in the lattice, the voiced second words that its compounds attest"
+source = "kiral-tools replay --dict, 2026-10-23, six runs on AC power (energy preference performance, the package at 78 C as they began) in turn with the dictionary without the voiced words: kana p50 0.038 to 0.040 ms, p99 0.258 to 0.273; conversions p50 0.047 to 0.051, p99 0.280 to 0.313 (before the numbers: kana p50 0.034, p99 0.232 and 0.248)"
 machine = "Intel Core i7-1360P, Ubuntu 26.10"
-core = "P, CPU 0, pinned, 4.50 GHz at the median"
-kana = { count = 5820, p50 = [0.04, 0.04], p99 = [0.279, 0.274] }
-conversions = { count = 200, p50 = [0.049, 0.05], p99 = [0.285, 0.306] }
+core = "P, CPU 0, pinned, 4.50 to 4.68 GHz at the median"
+kana = { count = 5820, p50 = [0.04, 0.04, 0.04, 0.039, 0.039, 0.039], p99 = [0.275, 0.292, 0.271, 0.265, 0.266, 0.265] }
+conversions = { count = 200, p50 = [0.051, 0.051, 0.049, 0.05, 0.049, 0.049], p99 = [0.311, 0.275, 0.314, 0.278, 0.289, 0.29] }
 
 [[replay]]
-system = "KIRAL's dictionary alone (mozc-sudachi, SudachiDict's core nouns): a kana at a time, each prefix converted from its lattice up, numbers of more than a digit made in the lattice"
-source = "kiral-tools replay --dict, 2026-10-23, two runs on AC power in turn with the build before numbers"
+system = "KIRAL's dictionary alone (mozc-sudachi, SudachiDict's core nouns): a kana at a time, each prefix converted from its lattice up, numbers of more than a digit made in the lattice, the voiced second words that its compounds attest"
+source = "kiral-tools replay --dict, 2026-10-23, six runs on AC power (energy preference performance, the package at 78 C as they began) in turn with the dictionary without the voiced words: kana p50 0.062 to 0.063 ms, p99 0.372 to 0.409; conversions p50 0.081 to 0.085, p99 0.414 to 0.446 (before the numbers: kana p50 0.054 and 0.053, p99 0.330 and 0.328)"
 machine = "Intel Core i7-1360P, Ubuntu 26.10"
-core = "E, CPU 8, pinned, 3.70 GHz at the median"
-kana = { count = 5820, p50 = [0.064, 0.065], p99 = [0.374, 0.387] }
-conversions = { count = 200, p50 = [0.082, 0.086], p99 = [0.412, 0.444] }
+core = "E, CPU 8, pinned, 3.65 to 3.70 GHz at the median"
+kana = { count = 5820, p50 = [0.062, 0.065, 0.063, 0.064, 0.063, 0.062], p99 = [0.373, 0.399, 0.382, 0.431, 0.379, 0.377] }
+conversions = { count = 200, p50 = [0.083, 0.088, 0.083, 0.084, 0.086, 0.085], p99 = [0.412, 0.417, 0.409, 0.473, 0.41, 0.413] }
 
 [[replay]]
 system = "Mozc 2.28 (Ubuntu 24.04), conversions only, its IPC included"

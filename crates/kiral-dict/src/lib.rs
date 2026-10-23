@@ -10,10 +10,11 @@
 //! connections between their classes, in a file that is read where it lies.
 //!
 //! A dictionary is built ([`file::build`]) from Mozc's open-source dictionary
-//! ([`mozc`]) and the nouns of SudachiDict's that it lacks ([`sudachi`]) into
-//! a file whose readings are a double-array trie over the codes of their
-//! characters ([`trie`]) and whose words are entries of a surface, the ids of
-//! the classes on their left and right, a cost and flags. Read
+//! ([`mozc`]), the nouns of SudachiDict's that it lacks ([`sudachi`]) and the
+//! voiced words their compounds attest ([`rendaku`]) into a file whose
+//! readings are a double-array trie over the codes of their characters
+//! ([`trie`]) and whose words are entries of a surface, the ids of the classes
+//! on their left and right, a cost and flags. Read
 //! ([`Dictionary::parse`]), it takes nothing but the bytes: the trie is walked,
 //! and the entries are read, where they lie, so that a file mapped from the
 //! disk is looked up without being copied. Its parser takes any bytes: what is
@@ -29,6 +30,7 @@ use std::ops::Range;
 pub mod file;
 pub mod mozc;
 pub mod normalize;
+pub mod rendaku;
 pub mod sudachi;
 pub mod trie;
 
