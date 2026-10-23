@@ -268,7 +268,16 @@ fn work(
         }
         let started = Instant::now();
         let mut stop = || generation.load(Ordering::Acquire) != job.generation;
-        let refined = match refine_job(zenz, dictionary, &mut judge, &job, &mut stop) {
+        let refined = match refine_reading(
+            zenz,
+            dictionary,
+            &mut judge,
+            &job.reading,
+            &job.context,
+            &job.carried,
+            job.rounds,
+            &mut stop,
+        ) {
             Ok(None) => continue,
             Ok(Some(refined)) => Ok(refined),
             Err(error) => Err(error.to_string()),
@@ -284,35 +293,39 @@ fn work(
     }
 }
 
-/// A job's refinement: its reading's lattice, its prompt -- without the left
-/// context where the prompt and the first draft would not fit the room of the
-/// model's cache with it -- and its rounds.
-fn refine_job(
+/// The worker's refinement of a reading, the text to its left given, from the
+/// constraint its draft is found within, by up to `rounds` rounds: its lattice,
+/// its prompt -- without the left context where the prompt and the first
+/// draft would not fit the room of the judge's cache with it -- and its rounds
+/// ([`refine::refine`]); none where `stop` said to stop.
+///
+/// # Errors
+///
+/// Where the model cannot compute the tokens: past its room, say.
+#[expect(
+    clippy::too_many_arguments,
+    reason = "the parts a refinement takes, each of its own kind"
+)]
+pub fn refine_reading(
     zenz: &Zenz<'_>,
     dictionary: &Dictionary<'_>,
     judge: &mut ZenzJudge<'_>,
-    job: &Job,
+    reading: &str,
+    context: &str,
+    carried: &Constraint,
+    rounds: usize,
     stop: &mut dyn FnMut() -> bool,
 ) -> Result<Option<Refined>, Error> {
     let tokenizer = &zenz.tokenizer;
-    let lattice = Lattice::new(dictionary, &job.reading);
-    let (path, _) = refine::draft(&lattice, dictionary, &job.carried);
+    let lattice = Lattice::new(dictionary, reading);
+    let (path, _) = refine::draft(&lattice, dictionary, carried);
     let mut draft = Vec::new();
     tokenizer.encode(&zenz::preprocess(&lattice.text(&path)), &mut draft);
-    let mut prompt = refine::prompt_tokens(tokenizer, &job.reading, &job.context);
-    if prompt.len() + draft.len() + 1 > judge.capacity() && !job.context.is_empty() {
-        prompt = refine::prompt_tokens(tokenizer, &job.reading, "");
+    let mut prompt = refine::prompt_tokens(tokenizer, reading, context);
+    if prompt.len() + draft.len() + 1 > judge.capacity() && !context.is_empty() {
+        prompt = refine::prompt_tokens(tokenizer, reading, "");
     }
-    refine::refine(
-        dictionary,
-        &lattice,
-        tokenizer,
-        judge,
-        &prompt,
-        &job.carried,
-        job.rounds,
-        stop,
-    )
+    refine::refine(dictionary, &lattice, tokenizer, judge, &prompt, carried, rounds, stop)
 }
 
 #[cfg(test)]

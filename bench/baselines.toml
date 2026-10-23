@@ -112,35 +112,35 @@ without_context = { accuracy = 91.0, cer = 0.69 }
 
 [[ajimee]]
 system = "zenz-v3.1-small alone in integers, weights of 8 bits rotated in blocks of 256 by regular Hadamard matrices (--int8 --rotate 256)"
-source = "kiral-tools eval, 2026-10-23"
-accuracy = 86.5
-cer = 1.67
+source = "kiral-tools eval, 2026-10-23, GELU and the softmax on KIRAL's own exponential (before it: 86.5, CER 1.67; +2 / -0, 1015 and 1709)"
+accuracy = 87.5
+cer = 1.55
 with_context = { accuracy = 83.0, cer = 2.47 }
-without_context = { accuracy = 90.0, cer = 0.88 }
+without_context = { accuracy = 92.0, cer = 0.64 }
 
 [[ajimee]]
 system = "zenz-v3.1-small alone in integers, weights of 4 bits, the output layer's of 8 (--weight-bits 4)"
-source = "kiral-tools eval, 2026-10-23"
-accuracy = 80.5
-cer = 2.56
-with_context = { accuracy = 77.0, cer = 3.42 }
-without_context = { accuracy = 84.0, cer = 1.69 }
+source = "kiral-tools eval, 2026-10-23, GELU and the softmax on KIRAL's own exponential (before it: 80.5, CER 2.56; +3 / -1)"
+accuracy = 81.5
+cer = 2.2
+with_context = { accuracy = 78.0, cer = 2.89 }
+without_context = { accuracy = 85.0, cer = 1.5 }
 
 [[ajimee]]
 system = "zenz-v3.1-small alone in integers, weights of 4 bits rotated in blocks of 256, the output layer's of 8 (--weight-bits 4 --rotate 256)"
-source = "kiral-tools eval, 2026-10-23"
-accuracy = 82.0
-cer = 2.07
-with_context = { accuracy = 79.0, cer = 2.85 }
-without_context = { accuracy = 85.0, cer = 1.29 }
+source = "kiral-tools eval, 2026-10-23, GELU and the softmax on KIRAL's own exponential (before it: 82.0, CER 2.07; +2 / -0)"
+accuracy = 83.0
+cer = 2.0
+with_context = { accuracy = 80.0, cer = 2.72 }
+without_context = { accuracy = 86.0, cer = 1.27 }
 
 [[ajimee]]
 system = "zenz-v3.1-small alone in integers, weights of 4 bits rotated in blocks of 256, scales fitted, the output layer's of 8 (--weight-bits 4 --rotate 256 --fitted)"
-source = "kiral-tools eval, 2026-10-23"
+source = "kiral-tools eval, 2026-10-23, GELU and the softmax on KIRAL's own exponential (before it: 83.0, CER 2.02; +1 / -1)"
 accuracy = 83.0
-cer = 2.02
+cer = 2.06
 with_context = { accuracy = 80.0, cer = 2.74 }
-without_context = { accuracy = 86.0, cer = 1.29 }
+without_context = { accuracy = 86.0, cer = 1.38 }
 
 [[ajimee]]
 system = "KIRAL's dictionary alone, built from Mozc's open-source dictionary (f183d4d3): Viterbi, no context"
@@ -286,21 +286,21 @@ conversions = { p50 = 2.1 }
 
 [[replay]]
 system = "KIRAL's engine: the dictionary's drafts (mozc-sudachi) refined by zenz-v3.1-small in integers (its model file) on a worker, a round a key, a kana every 100 ms; Space waits 30 ms for up to 8 rounds"
-source = "kiral-tools replay --model --dict --limit 50, 2026-10-23, two runs, on AC power (energy preference performance), the package at 79 to 82 C as the runs began, numbers of more than a digit made in the lattice (before them: kana p99 0.439 and 0.468 ms, refinements p50 16.36 and 15.104 ms, 42 and 42 right)"
+source = "kiral-tools replay --model --dict --limit 50, 2026-10-23, two runs on AC power (energy preference performance) in turn with the build before, the package at 70 to 78 C as the runs began, GELU and the softmax on KIRAL's own exponential, the inputs quantized by comparisons and 2^23, attention's values in pairs (before them: kana p99 0.49 and 0.496 ms, refinements p50 15.728 and 16.322 ms, p99 53.727 and 54.098, 49 and 49 refined, 42 and 42 right)"
 machine = "Intel Core i7-1360P, Ubuntu 26.10"
-core = "P, typing on CPU 0, 1.54 and 1.16 GHz at the median; the worker on CPU 2, pinned, 2.51 and 2.43 GHz at the median"
-kana = { count = 1435, p50 = [0.146, 0.142], p99 = [0.492, 0.499] }
-refinements = { count = [1435, 1435], p50 = [16.395, 16.564], p99 = [56.343, 55.826] }
-conversions = { count = 50, refined = [49, 50], p50 = [0.57, 0.594], p99 = [30.06, 28.543], correct = [42, 43] }
+core = "P, typing on CPU 0, 1.77 and 1.79 GHz at the median; the worker on CPU 2, pinned, 2.48 and 2.37 GHz at the median"
+kana = { count = 1435, p50 = [0.145, 0.138], p99 = [0.472, 0.454] }
+refinements = { count = [1435, 1435], p50 = [12.484, 12.787], p99 = [41.648, 39.537] }
+conversions = { count = 50, refined = [50, 50], p50 = [0.525, 0.541], p99 = [27.774, 26.097], correct = [43, 43] }
 
 [[replay]]
 system = "KIRAL's engine: the dictionary's drafts (mozc-sudachi) refined by zenz-v3.1-small in integers (its model file) on a worker, a round a key, a kana every 100 ms; Space waits 30 ms for up to 8 rounds"
-source = "kiral-tools replay --model --dict --limit 50, 2026-10-23, two runs, on AC power (energy preference performance), the package at 79 to 82 C as the runs began, numbers of more than a digit made in the lattice (before them: refinements p50 39.48 and 39.787 ms, 39 and 39 right)"
+source = "kiral-tools replay --model --dict --limit 50, 2026-10-23, two runs on AC power (energy preference performance) in turn with the build before, the package at 70 to 78 C as the runs began, GELU and the softmax on KIRAL's own exponential, the inputs quantized by comparisons and 2^23, attention's values in pairs (before them: refinements p50 43.052 and 43.029 ms, 1218 and 1229 of 1435 in time, 36 and 38 refined, 37 and 38 right)"
 machine = "Intel Core i7-1360P, Ubuntu 26.10"
-core = "E, typing on CPU 8, 2.92 and 2.46 GHz at the median; the worker on CPU 9, pinned, 3.64 and 3.69 GHz at the median"
-kana = { count = 1435, p50 = [0.202, 0.198], p99 = [0.716, 0.719] }
-refinements = { count = [1239, 1238], p50 = [41.033, 41.249], p99 = [98.344, 97.9] }
-conversions = { count = 50, refined = [37, 39], p50 = [0.762, 0.765], p99 = [30.11, 30.135], correct = [39, 39] }
+core = "E, typing on CPU 8, 2.33 and 1.27 GHz at the median; the worker on CPU 9, pinned, 3.69 and 3.70 GHz at the median"
+kana = { count = 1435, p50 = [0.205, 0.197], p99 = [0.721, 0.691] }
+refinements = { count = [1332, 1333], p50 = [36.722, 36.563], p99 = [96.736, 96.625] }
+conversions = { count = 50, refined = [42, 42], p50 = [0.645, 0.664], p99 = [30.145, 30.128], correct = [41, 41] }
 
 [[replay]]
 system = "KIRAL's engine: the dictionary's drafts (mozc-sudachi) refined by zenz-v3.1-small in integers (its model file) on a worker, a round a key, a kana every 100 ms; Space waits 30 ms for up to 8 rounds"
@@ -322,99 +322,99 @@ conversions = { count = 50, refined = 24, p50 = [30.106, 30.103], p99 = [30.141,
 
 [[agree]]
 system = "zenz-v3.1-small, weights of 8 bits (--int8), the portable form, from the directory or from the model file"
-source = "kiral-tools agree, 2026-10-23"
+source = "kiral-tools agree, 2026-10-23, GELU and the softmax on KIRAL's own exponential (before it: 12606 of every position)"
 conversion_positions = { agree = 4395, of = 4396 }
-every_position = { agree = 12606, of = 12747 }
+every_position = { agree = 12610, of = 12747 }
 
 [[agree]]
 system = "zenz-v3.1-small, weights of 8 bits (--int8), the AVX-VNNI form, from the directory or from the model file (--quantized)"
-source = "kiral-tools agree, 2026-10-23"
+source = "kiral-tools agree, 2026-10-23, GELU and the softmax on KIRAL's own exponential (before it: 12625 of every position)"
 conversion_positions = { agree = 4395, of = 4396 }
-every_position = { agree = 12625, of = 12747 }
+every_position = { agree = 12612, of = 12747 }
 
 [[agree]]
 system = "zenz-v3.1-small, weights of 8 bits, rotated in blocks of 256 (--int8 --rotate 256)"
-source = "kiral-tools agree, 2026-10-23"
+source = "kiral-tools agree, 2026-10-23, GELU and the softmax on KIRAL's own exponential (before it: 4395 and 12653)"
 conversion_positions = { agree = 4395, of = 4396 }
-every_position = { agree = 12653, of = 12747 }
+every_position = { agree = 12645, of = 12747 }
 
 [[agree]]
 system = "zenz-v3.1-small, weights of 4 bits, the output layer's of 8 (--weight-bits 4)"
-source = "kiral-tools agree, 2026-10-23"
-conversion_positions = { agree = 4366, of = 4396 }
-every_position = { agree = 11749, of = 12747 }
+source = "kiral-tools agree, 2026-10-23, GELU and the softmax on KIRAL's own exponential (before it: 4366 and 11749)"
+conversion_positions = { agree = 4367, of = 4396 }
+every_position = { agree = 11735, of = 12747 }
 
 [[agree]]
 system = "zenz-v3.1-small, weights of 4 bits, scales fitted (--weight-bits 4 --fitted)"
-source = "kiral-tools agree, 2026-10-23"
-conversion_positions = { agree = 4362, of = 4396 }
-every_position = { agree = 11655, of = 12747 }
+source = "kiral-tools agree, 2026-10-23, GELU and the softmax on KIRAL's own exponential (before it: 4362 and 11655)"
+conversion_positions = { agree = 4359, of = 4396 }
+every_position = { agree = 11665, of = 12747 }
 
 [[agree]]
 system = "zenz-v3.1-small, weights of 4 bits, rotated in blocks of 64, scales fitted (--weight-bits 4 --rotate 64 --fitted)"
-source = "kiral-tools agree, 2026-10-23"
-conversion_positions = { agree = 4367, of = 4396 }
-every_position = { agree = 11800, of = 12747 }
+source = "kiral-tools agree, 2026-10-23, GELU and the softmax on KIRAL's own exponential (before it: 4367 and 11800)"
+conversion_positions = { agree = 4366, of = 4396 }
+every_position = { agree = 11790, of = 12747 }
 
 [[agree]]
 system = "zenz-v3.1-small, weights of 4 bits, rotated in blocks of 256 (--weight-bits 4 --rotate 256)"
-source = "kiral-tools agree, 2026-10-23"
+source = "kiral-tools agree, 2026-10-23, GELU and the softmax on KIRAL's own exponential (before it: 4378 and 11757)"
 conversion_positions = { agree = 4378, of = 4396 }
-every_position = { agree = 11757, of = 12747 }
+every_position = { agree = 11745, of = 12747 }
 
 [[agree]]
 system = "zenz-v3.1-small, weights of 4 bits, rotated in blocks of 256, scales fitted (--weight-bits 4 --rotate 256 --fitted)"
-source = "kiral-tools agree, 2026-10-23"
-conversion_positions = { agree = 4376, of = 4396 }
-every_position = { agree = 11814, of = 12747 }
+source = "kiral-tools agree, 2026-10-23, GELU and the softmax on KIRAL's own exponential (before it: 4376 and 11814)"
+conversion_positions = { agree = 4377, of = 4396 }
+every_position = { agree = 11810, of = 12747 }
 
 [[model]]
 system = "zenz-v3.1-small alone, single precision"
-source = "kiral-tools bench model --limit 50, 2026-10-23, two runs"
+source = "kiral-tools bench model --limit 50, 2026-10-23, two runs, GELU and the softmax on KIRAL's own exponential, the inputs quantized by comparisons and 2^23, attention's values in pairs"
 machine = "Intel Core i7-1360P, Ubuntu 26.10"
-core = "P, CPU 0, pinned, 4.30 and 4.40 GHz at the median"
-prompts = { count = 50, tokens_p50 = 37, p50 = [174.557, 175.749], p99 = [492.101, 474.144] }
-steps = { count = 1051, p50 = [16.219, 15.885], p99 = [20.479, 19.975] }
+core = "P, CPU 0, pinned, 4.22 and 4.30 GHz at the median"
+prompts = { count = 50, tokens_p50 = 37, p50 = [178.083, 170.402], p99 = [533.006, 535.673] }
+steps = { count = 1051, p50 = [14.512, 14.489], p99 = [21.226, 19.265] }
 
 [[model]]
 system = "zenz-v3.1-small alone, single precision"
-source = "kiral-tools bench model --limit 50, 2026-10-23, two runs"
+source = "kiral-tools bench model --limit 50, 2026-10-23, two runs, GELU and the softmax on KIRAL's own exponential, the inputs quantized by comparisons and 2^23, attention's values in pairs"
 machine = "Intel Core i7-1360P, Ubuntu 26.10"
 core = "E, CPU 8, pinned, 3.70 GHz at the median"
-prompts = { count = 50, tokens_p50 = 37, p50 = [245.77, 253.907], p99 = [688.142, 699.963] }
-steps = { count = 1051, p50 = [20.905, 21.077], p99 = [26.486, 27.179] }
+prompts = { count = 50, tokens_p50 = 37, p50 = [245.897, 250.223], p99 = [684.48, 695.61] }
+steps = { count = 1051, p50 = [17.966, 17.814], p99 = [21.43, 21.657] }
 
 [[model]]
 system = "zenz-v3.1-small alone in integers (--int8), the portable form"
-source = "kiral-tools bench model --limit 50, 2026-10-23, two runs"
+source = "kiral-tools bench model --limit 50, 2026-10-23, two runs, GELU and the softmax on KIRAL's own exponential, the inputs quantized by comparisons and 2^23, attention's values in pairs"
 machine = "Intel Core i7-1360P, Ubuntu 26.10"
-core = "P, CPU 0, pinned, 4.34 and 4.40 GHz at the median"
-prompts = { count = 50, tokens_p50 = 37, p50 = [367.998, 351.416], p99 = [1041.522, 1020.034] }
-steps = { count = 1051, p50 = [13.531, 14.312], p99 = [17.652, 17.115] }
+core = "P, CPU 0, pinned, 4.30 GHz at the median of both"
+prompts = { count = 50, tokens_p50 = 37, p50 = [361.621, 348.681], p99 = [1016.879, 1018.504] }
+steps = { count = 1051, p50 = [13.109, 13.032], p99 = [16.886, 17.164] }
 
 [[model]]
 system = "zenz-v3.1-small alone in integers (--int8), the portable form"
-source = "kiral-tools bench model --limit 50, 2026-10-23, two runs"
+source = "kiral-tools bench model --limit 50, 2026-10-23, two runs, GELU and the softmax on KIRAL's own exponential, the inputs quantized by comparisons and 2^23, attention's values in pairs"
 machine = "Intel Core i7-1360P, Ubuntu 26.10"
 core = "E, CPU 8, pinned, 3.70 GHz at the median"
-prompts = { count = 50, tokens_p50 = 37, p50 = [488.053, 486.154], p99 = [1401.636, 1399.394] }
-steps = { count = 1051, p50 = [21.298, 23.248], p99 = [24.193, 25.351] }
+prompts = { count = 50, tokens_p50 = 37, p50 = [471.553, 473.901], p99 = [1361.466, 1362.162] }
+steps = { count = 1051, p50 = [20.351, 20.42], p99 = [22.611, 22.766] }
 
 [[model]]
 system = "zenz-v3.1-small alone in integers (--int8), the AVX-VNNI form"
-source = "kiral-tools bench model --limit 50, 2026-10-23, two runs"
+source = "kiral-tools bench model --limit 50, 2026-10-23, two runs in turn with the build before, GELU and the softmax on KIRAL's own exponential, the inputs quantized by comparisons and 2^23, attention's values in pairs (before them: prompts p50 28.567 and 29.919 ms, p99 83.047 and 88.073; steps p50 4.698 and 4.706, at 4.80 and 4.68 GHz)"
 machine = "Intel Core i7-1360P, Ubuntu 26.10"
-core = "P, CPU 0, pinned, 4.96 GHz at the median of both"
-prompts = { count = 50, tokens_p50 = 37, p50 = [27.447, 27.334], p99 = [82.001, 80.844] }
-steps = { count = 1051, p50 = [5.527, 5.389], p99 = [6.766, 6.335] }
+core = "P, CPU 0, pinned, 4.77 and 4.20 GHz at the median"
+prompts = { count = 50, tokens_p50 = 37, p50 = [21.279, 22.942], p99 = [67.641, 67.326] }
+steps = { count = 1051, p50 = [4.501, 4.711], p99 = [6.054, 6.898] }
 
 [[model]]
 system = "zenz-v3.1-small alone in integers (--int8), the AVX-VNNI form"
-source = "kiral-tools bench model --limit 50, 2026-10-23, two runs"
+source = "kiral-tools bench model --limit 50, 2026-10-23, two runs in turn with the build before, GELU and the softmax on KIRAL's own exponential, the inputs quantized by comparisons and 2^23, attention's values in pairs (before them: prompts p50 89.887 and 90.172 ms, p99 262.687 and 265.975; steps p50 9.508 and 9.519)"
 machine = "Intel Core i7-1360P, Ubuntu 26.10"
 core = "E, CPU 8, pinned, 3.70 GHz at the median"
-prompts = { count = 50, tokens_p50 = 37, p50 = [88.476, 88.598], p99 = [266.285, 264.513] }
-steps = { count = 1051, p50 = [11.344, 10.717], p99 = [12.816, 12.234] }
+prompts = { count = 50, tokens_p50 = 37, p50 = [76.715, 74.622], p99 = [223.591, 234.44] }
+steps = { count = 1051, p50 = [9.157, 9.294], p99 = [10.884, 13.376] }
 
 [[model]]
 system = "zenz-v3.1-small alone in integers, from its model file, mapped, the AVX-VNNI form"
@@ -450,39 +450,39 @@ steps = { count = 1051, p50 = [10.155, 11.913], p99 = [14.061, 15.118] }
 
 [[load]]
 system = "zenz-v3.1-small in integers, its model file mapped (111.9 MB), the AVX-VNNI form"
-source = "kiral-tools bench load, 2026-10-23, two runs"
+source = "kiral-tools bench load, 2026-10-23, two runs, GELU and the softmax on KIRAL's own exponential, the inputs quantized by comparisons and 2^23, attention's values in pairs"
 machine = "Intel Core i7-1360P, Ubuntu 26.10"
-core = "P, CPU 0, pinned, 4.57 and 4.59 GHz at the median"
-loads = { count = 10, p50 = [0.462, 0.487], p99 = [0.68, 0.766] }
-first_prompts = { count = 10, tokens = 71, p50 = [55.649, 55.878] }
-second_prompts = { count = 10, tokens = 71, p50 = [54.885, 55.706] }
+core = "P, CPU 0, pinned, 4.54 and 4.57 GHz at the median"
+loads = { count = 10, p50 = [0.555, 0.569], p99 = [0.883, 0.897] }
+first_prompts = { count = 10, tokens = 71, p50 = [43.128, 42.823] }
+second_prompts = { count = 10, tokens = 71, p50 = [40.899, 40.662] }
 
 [[load]]
 system = "zenz-v3.1-small in integers (--int8), its safetensors read and quantized (180.9 MB), the AVX-VNNI form"
-source = "kiral-tools bench load, 2026-10-23, two runs"
+source = "kiral-tools bench load, 2026-10-23, two runs, GELU and the softmax on KIRAL's own exponential, the inputs quantized by comparisons and 2^23, attention's values in pairs"
 machine = "Intel Core i7-1360P, Ubuntu 26.10"
-core = "P, CPU 0, pinned, 4.94 and 4.40 GHz at the median"
-loads = { count = 10, p50 = [467.151, 534.597], p99 = [518.207, 586.162] }
-first_prompts = { count = 10, tokens = 71, p50 = [55.594, 58.974] }
-second_prompts = { count = 10, tokens = 71, p50 = [55.496, 58.556] }
+core = "P, CPU 0, pinned, 4.82 and 4.80 GHz at the median"
+loads = { count = 10, p50 = [450.197, 451.787], p99 = [463.285, 486.067] }
+first_prompts = { count = 10, tokens = 71, p50 = [41.887, 41.629] }
+second_prompts = { count = 10, tokens = 71, p50 = [41.447, 41.348] }
 
 [[load]]
 system = "zenz-v3.1-small in integers, its model file mapped (111.9 MB), the AVX-VNNI form"
-source = "kiral-tools bench load, 2026-10-23, two runs"
+source = "kiral-tools bench load, 2026-10-23, two runs, GELU and the softmax on KIRAL's own exponential, the inputs quantized by comparisons and 2^23, attention's values in pairs"
 machine = "Intel Core i7-1360P, Ubuntu 26.10"
 core = "E, CPU 8, pinned, 3.70 GHz at the median"
-loads = { count = 10, p50 = [1.232, 1.251], p99 = [1.356, 1.279] }
-first_prompts = { count = 10, tokens = 71, p50 = [178.88, 180.026] }
-second_prompts = { count = 10, tokens = 71, p50 = [178.084, 178.874] }
+loads = { count = 10, p50 = [1.307, 1.314], p99 = [1.429, 1.358] }
+first_prompts = { count = 10, tokens = 71, p50 = [154.575, 155.013] }
+second_prompts = { count = 10, tokens = 71, p50 = [151.399, 152.137] }
 
 [[load]]
 system = "zenz-v3.1-small in integers (--int8), its safetensors read and quantized (180.9 MB), the AVX-VNNI form"
-source = "kiral-tools bench load, 2026-10-23, two runs"
+source = "kiral-tools bench load, 2026-10-23, two runs, GELU and the softmax on KIRAL's own exponential, the inputs quantized by comparisons and 2^23, attention's values in pairs"
 machine = "Intel Core i7-1360P, Ubuntu 26.10"
 core = "E, CPU 8, pinned, 3.70 GHz at the median"
-loads = { count = 10, p50 = [636.818, 645.711], p99 = [689.285, 692.055] }
-first_prompts = { count = 10, tokens = 71, p50 = [179.335, 180.93] }
-second_prompts = { count = 10, tokens = 71, p50 = [178.848, 179.432] }
+loads = { count = 10, p50 = [620.951, 627.47], p99 = [655.815, 667.567] }
+first_prompts = { count = 10, tokens = 71, p50 = [152.241, 153.103] }
+second_prompts = { count = 10, tokens = 71, p50 = [150.406, 151.491] }
 
 [[kernels]]
 system = "the products in integers of zenz's layers, weights of 8 bits"
@@ -499,3 +499,41 @@ machine = "Intel Core i7-1360P, Ubuntu 26.10"
 core = "E, CPU 8, pinned, 3.70 GHz at the median"
 avx_vnni = { rows_1 = [32.0, 44.8], rows_4 = [46.6, 48.0], rows_16 = [46.6, 47.7], rows_40 = [46.3, 47.9] }
 portable = { any_rows = [6.3, 6.7] }
+
+[[kernels]]
+system = "the kernels of single precision a block of zenz takes besides its products, built for x86-64-v2: GELU of 3072 a row (on KIRAL's own exponential; a copy each time), the inputs of 768 and of 3072 quantized (by comparisons and 2^23), a layer normalization of 768, attention of 12 heads of 64 a row over 72 positions (the softmax on the same exponential, the values in pairs); milliseconds"
+source = "kiral-tools bench kernels --rows 1,4,16,20,40, 2026-10-23, two runs"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "P, CPU 0, pinned, 4.30 GHz at the median of both"
+gelu = { rows_16 = [0.0593, 0.0625], rows_20 = [0.0757, 0.0773], rows_40 = [0.1523, 0.1537] }
+quantized_768 = { rows_16 = [0.0077, 0.0077], rows_20 = [0.0095, 0.0096], rows_40 = [0.0187, 0.02] }
+quantized_3072 = { rows_16 = [0.0304, 0.0308], rows_20 = [0.0379, 0.0397], rows_40 = [0.0761, 0.0796] }
+normalized_768 = { rows_16 = [0.0035, 0.004], rows_20 = [0.0044, 0.0044], rows_40 = [0.0087, 0.009] }
+attention = { rows_16 = [0.148, 0.1546], rows_20 = [0.1893, 0.1896], rows_40 = [0.3878, 0.3783] }
+
+[[kernels]]
+system = "the kernels of single precision a block of zenz takes besides its products, built for x86-64-v2: GELU of 3072 a row (on KIRAL's own exponential; a copy each time), the inputs of 768 and of 3072 quantized (by comparisons and 2^23), a layer normalization of 768, attention of 12 heads of 64 a row over 72 positions (the softmax on the same exponential, the values in pairs); milliseconds"
+source = "kiral-tools bench kernels --rows 1,4,16,20,40, 2026-10-23, two runs"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "E, CPU 8, pinned, 3.70 GHz at the median"
+gelu = { rows_16 = [0.1411, 0.1337], rows_20 = [0.1679, 0.167], rows_40 = [0.3341, 0.3374] }
+quantized_768 = { rows_16 = [0.0098, 0.0098], rows_20 = [0.0123, 0.0123], rows_40 = [0.0245, 0.0245] }
+quantized_3072 = { rows_16 = [0.0386, 0.0387], rows_20 = [0.0482, 0.0482], rows_40 = [0.0964, 0.0963] }
+normalized_768 = { rows_16 = [0.0055, 0.0055], rows_20 = [0.0067, 0.0067], rows_40 = [0.0134, 0.0134] }
+attention = { rows_16 = [0.2671, 0.2671], rows_20 = [0.3366, 0.3336], rows_40 = [0.676, 0.673] }
+
+[[keys]]
+system = "KIRAL's engine's refinement of each key, back to back (kiral-tools bench keys): the dictionary's drafts (mozc-sudachi) refined by zenz-v3.1-small in integers (its model file), a round a key from the constraint the last left, up to 8 rounds for a conversion; 19.8 tokens fed a key on average"
+source = "kiral-tools bench keys --limit 50, 2026-10-23, two runs on AC power, GELU and the softmax on KIRAL's own exponential, the inputs quantized by comparisons and 2^23, attention's values in pairs (before them, the same key jobs on CPU 2 in turn with this build, two runs each: p50 15.079 and 16.28 ms against 12.105 and 12.18)"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "P, CPU 0, pinned, 4.10 and 4.20 GHz at the median"
+keys = { count = 1435, p50 = [12.291, 12.173], p99 = [44.651, 45.56] }
+conversions = { count = 50, p50 = [0.383, 0.364], p99 = [24.398, 24.961], correct = [43, 43] }
+
+[[keys]]
+system = "KIRAL's engine's refinement of each key, back to back (kiral-tools bench keys): the dictionary's drafts (mozc-sudachi) refined by zenz-v3.1-small in integers (its model file), a round a key from the constraint the last left, up to 8 rounds for a conversion; 19.8 tokens fed a key on average"
+source = "kiral-tools bench keys --limit 50, 2026-10-23, two runs on AC power, GELU and the softmax on KIRAL's own exponential, the inputs quantized by comparisons and 2^23, attention's values in pairs (before them, the same key jobs on CPU 9 in turn with this build, two runs each: p50 47.276 and 46.806 ms against 37.897 and 38.068)"
+machine = "Intel Core i7-1360P, Ubuntu 26.10"
+core = "E, CPU 8, pinned, 3.70 GHz at the median"
+keys = { count = 1435, p50 = [38.036, 40.663], p99 = [139.642, 145.251] }
+conversions = { count = 50, p50 = [0.543, 0.6], p99 = [73.317, 83.074], correct = [43, 43] }

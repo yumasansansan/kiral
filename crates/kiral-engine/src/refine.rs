@@ -29,7 +29,6 @@
 //! feeds only what changed.
 
 use kiral_dict::Dictionary;
-use kiral_kernels::vector::argmax;
 use kiral_lattice::{Constraint, Lattice, Path};
 use kiral_nn::Error;
 use kiral_nn::gpt2::Session;
@@ -64,13 +63,13 @@ const NOT_COMPUTED: u32 = u32::MAX;
 #[derive(Debug)]
 pub struct ZenzJudge<'m> {
     session: Session<'m>,
-    vocabulary: usize,
     /// The tokens whose keys and values the session holds, in order.
     fed: Vec<u32>,
     /// The likeliest token after each of them, [`NOT_COMPUTED`] where its
     /// logits were not computed.
     after: Vec<u32>,
-    logits: Vec<f32>,
+    /// The likeliest tokens a feeding gives.
+    likeliest: Vec<Option<usize>>,
     /// The tokens fed to the model so far: what the refinements cost.
     tokens_fed: usize,
 }
@@ -85,10 +84,9 @@ impl<'m> ZenzJudge<'m> {
     pub fn new(zenz: &'m Zenz<'m>, capacity: usize) -> Self {
         Self {
             session: Session::new(&zenz.model, capacity),
-            vocabulary: zenz.model.config().vocabulary,
             fed: Vec::new(),
             after: Vec::new(),
-            logits: Vec::new(),
+            likeliest: Vec::new(),
             tokens_fed: 0,
         }
     }
@@ -137,15 +135,15 @@ impl Judge for ZenzJudge<'_> {
         if keep < tokens.len() {
             let feed = &tokens[keep..];
             let first = from.saturating_sub(keep);
-            self.logits.resize((feed.len() - first) * self.vocabulary, 0.0);
-            if !self.session.feed_from(feed, first, &mut self.logits, stop)? {
+            self.likeliest.resize(feed.len() - first, None);
+            if !self.session.feed_likeliest(feed, first, &mut self.likeliest, stop)? {
                 return Ok(false);
             }
             self.tokens_fed += feed.len();
             self.fed.extend_from_slice(feed);
             self.after.extend(std::iter::repeat_n(NOT_COMPUTED, first));
-            self.after.extend(self.logits.chunks_exact(self.vocabulary).map(|row| {
-                argmax(row)
+            self.after.extend(self.likeliest.iter().map(|token| {
+                token
                     .and_then(|token| u32::try_from(token).ok())
                     .unwrap_or(NOT_COMPUTED)
             }));

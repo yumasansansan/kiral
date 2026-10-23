@@ -14,7 +14,7 @@
 //! lengths are chosen not to be multiples of the vectors' widths, nor of the
 //! linear layers' tiles.
 
-use kiral_kernels::activation::{gelu_tanh, softmax};
+use kiral_kernels::activation::{exp, gelu_tanh, softmax};
 use kiral_kernels::attention::attention;
 use kiral_kernels::linear::{COLUMNS, Packed, ROWS, linear};
 use kiral_kernels::norm::layer_norm;
@@ -283,36 +283,74 @@ fn a_constant_row_normalizes_to_its_bias() {
     assert_eq!(output, bias);
 }
 
+/// The largest relative error of [`exp`], measured against double precision
+/// on every float from -87.34 to 88.38, with the multiply-adds fused (1.37 u
+/// without).
+const EXP_ERROR: f64 = 1.42 * U;
+
+#[test]
+fn the_exponential_is_within_its_bound() {
+    // Every 4099th float of the range, both signs, and its ends.
+    let lowest = -87.336_55f32;
+    let highest = 88.376_26f32;
+    let mut checked = 0;
+    for (start, end) in [(0x8000_0000u32, lowest.to_bits()), (0, highest.to_bits())] {
+        for bits in (start..=end).step_by(4099).chain([end]) {
+            let x = f32::from_bits(bits);
+            let exact = f64::from(x).exp();
+            let error = (f64::from(exp(x)) - exact).abs();
+            assert!(error <= EXP_ERROR * exact, "exp({x}) is {}, {exact} exactly", exp(x));
+            checked += 1;
+        }
+    }
+    assert!(checked > 500_000);
+    // Below the least normal float, 0; above the range, its end; NaN stays.
+    assert_eq!(exp(-87.34), 0.0);
+    assert_eq!(exp(-1e30), 0.0);
+    assert_eq!(exp(f32::NEG_INFINITY), 0.0);
+    assert_eq!(exp(1e30), exp(highest));
+    assert!(exp(highest).is_finite());
+    assert!(exp(f32::NAN).is_nan());
+    assert_eq!(exp(0.0), 1.0);
+}
+
 #[test]
 fn gelu_is_within_its_bound() {
     let mut random = Random(6);
-    let mut values = random.values(997, 8.0);
-    values.extend([0.0, 1e-3, -1e-3, 0.5, -0.5, 3.0, -3.0, 40.0, -40.0]);
+    let mut values = random.values(99_997, 8.0);
+    values.extend([
+        0.0, 1e-3, -1e-3, 0.5, -0.5, 0.77, -0.77, 3.0, -3.0, 9.0, -9.0, 40.0, -40.0,
+    ]);
     let mut output = values.clone();
     gelu_tanh(&mut output);
     for (&x, &y) in values.iter().zip(&output) {
         let x = f64::from(x);
         let inner = (2.0 / std::f64::consts::PI).sqrt() * (x + 0.044_715 * x * x * x);
         let exact = 0.5 * x * (1.0 + inner.tanh());
-        // The argument of tanh is within 5 u of its magnitude (five roundings, its
-        // terms of one sign), and tanh's slope 1 - tanh^2 times it is at most
-        // 0.45 times that, since z sech^2(z) <= 0.45; tanh adds its own error, a few
-        // units in the last place, 1 + t one rounding, and the product with x / 2
-        // one more: within 8 u |x| allows the library's tanh 9 units.
+        // GELU is computed as x / (1 + e), e = exp(-2z). z is within 6.1 u of its
+        // magnitude: x^3 two roundings, its product with the cube's coefficient
+        // one and the coefficient's own 0.58 u, the sum of terms of one sign one,
+        // and the product with sqrt(2 / pi) one and its own 0.48 u. e is off by
+        // twice that times |z| relatively, and by the exponential's own 1.42 u; a
+        // relative error r of e moves x / (1 + e) by |x| r e / (1 + e)^2 =
+        // |x| r / (4 cosh^2 z), so that z's part is at most 3.05 u |x| z sech^2 z
+        // <= 1.37 u |x| (z sech^2 z <= 0.448) and the exponential's 0.36 u |x|;
+        // 1 + e and the division round once each, u of a result at most |x|.
+        // Within 3.73 u |x|.
         let error = (f64::from(y) - exact).abs();
-        assert!(error <= 8.0 * U * x.abs(), "GELU({x}) is {y}, {exact} exactly");
+        assert!(error <= 3.73 * U * x.abs(), "GELU({x}) is {y}, {exact} exactly");
     }
 }
 
 /// The bound of the relative error of each weight of a softmax: each
 /// exponential's argument is rounded once, which moves the exponential by its
-/// magnitude times `u`, and the library's exponential adds up to two units in
-/// the last place (`4 u`); the sum adds `gamma(n)`, and the division and the
-/// product two roundings. A weight is off by its own exponential's error and at
-/// most the largest of the others'.
+/// magnitude times `u`, and the exponential adds its own error ([`EXP_ERROR`]);
+/// the sum adds `gamma(n)`, and the division and the product two roundings. A
+/// weight is off by its own exponential's error and at most the largest of the
+/// others'.
 fn softmax_bounds(x: &[f64]) -> Vec<f64> {
     let largest = x.iter().copied().fold(f64::NEG_INFINITY, f64::max);
-    let exponential = |x: f64| U * ((x - largest).abs() + 4.0);
+    let exponential = |x: f64| U * (x - largest).abs() + EXP_ERROR;
     let worst = x.iter().copied().map(exponential).fold(0.0, f64::max);
     let sum = gamma(x.len().max(1));
     x.iter().map(|&x| exponential(x) + worst + sum + 2.0 * U).collect()
@@ -347,7 +385,7 @@ fn softmax_is_within_its_bound() {
 #[test]
 fn attention_is_within_its_bound() {
     let mut random = Random(8);
-    for (width, positions) in [(1, 1), (8, 3), (64, 1), (64, 17), (64, 200), (33, 9)] {
+    for (width, positions) in [(1, 1), (8, 3), (64, 1), (64, 2), (64, 17), (64, 72), (64, 200), (33, 9)] {
         let query = random.values(width, 1.0);
         let keys = random.values(positions * width, 1.0);
         let values = random.values(positions * width, 1.0);
@@ -359,7 +397,9 @@ fn attention_is_within_its_bound() {
         // the scale (a power of two, exact); a weight is off by its softmax's
         // relative error, and by its own score's error and at most the largest of
         // the others' as a relative error too; the output adds the weighted values
-        // in `positions` multiply-adds.
+        // two positions at a time, a pair's products rounded and summed and then
+        // added to the output, a value going through at most `positions`
+        // roundings (two for a pair, then one for each pair or position after).
         let q = wide(&query);
         let mut exact_scores = Vec::with_capacity(positions);
         let mut score_errors = Vec::with_capacity(positions);

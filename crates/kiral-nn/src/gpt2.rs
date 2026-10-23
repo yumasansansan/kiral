@@ -41,7 +41,7 @@ use kiral_kernels::attention::attention;
 use kiral_kernels::linear::{Packed, linear};
 use kiral_kernels::norm::layer_norm;
 use kiral_kernels::quantized::{self, Rotation, Rows, Scheme};
-use kiral_kernels::vector::{add, logits};
+use kiral_kernels::vector::{add, argmax, logits};
 use kiral_model::file::{Floats, Kind, ModelFile, Panels, Tensor};
 use kiral_model::json::{Object, Value};
 use kiral_model::safetensors::SafeTensors;
@@ -806,12 +806,13 @@ impl<'m> Session<'m> {
         Ok(())
     }
 
-    /// Computes the tokens at the next positions, and writes the logits after
-    /// each of them from the `first`-th on, a row of the vocabulary's for each:
-    /// what checking a draft needs, the output layer left out for the rows of
-    /// the prompt before it. `stop` is asked before each block; where it says
-    /// to stop, the positions are not kept, the logits not written, and the
-    /// answer is false.
+    /// Computes the tokens at the next positions, and writes the likeliest token
+    /// after each of them from the `first`-th on, none where its logits are NaNs
+    /// alone: what checking a draft needs, the output layer left out for the
+    /// rows of the prompt before it, and its argmax taken as its products are
+    /// summed, the logits never written out ([`quantized::likeliest`]). `stop`
+    /// is asked before each block; where it says to stop, the positions are not
+    /// kept, nothing is written, and the answer is false.
     ///
     /// # Errors
     ///
@@ -820,30 +821,40 @@ impl<'m> Session<'m> {
     ///
     /// # Panics
     ///
-    /// Where `first` is past the tokens, or `output` is not a row of logits
-    /// for each token from the `first`-th on.
-    pub fn feed_from(
+    /// Where `first` is past the tokens, or `likeliest` is not a value for each
+    /// token from the `first`-th on.
+    pub fn feed_likeliest(
         &mut self,
         tokens: &[u32],
         first: usize,
-        output: &mut [f32],
+        likeliest: &mut [Option<usize>],
         stop: &mut dyn FnMut() -> bool,
     ) -> Result<bool, Error> {
         let config = self.model.config;
         assert!(
             first < tokens.len().max(1),
-            "logits from token {first} of {}",
+            "the likeliest tokens from token {first} of {}",
             tokens.len()
         );
         assert_eq!(
-            output.len(),
-            (tokens.len() - first) * config.vocabulary,
-            "logits that are not a row of the vocabulary's for each token from the {first}-th"
+            likeliest.len(),
+            tokens.len() - first,
+            "not a likeliest token for each token from the {first}-th"
         );
         let Some((stream, mut room)) = self.forward(tokens, stop)? else {
             return Ok(false);
         };
-        self.head(&stream[first * config.width..], &mut room, output);
+        let hidden = self.normalized(&stream[first * config.width..]);
+        if let Some(head) = &self.model.head {
+            room.quantized.quantize(&hidden, config.width, head.scheme().rotation);
+            quantized::likeliest(&room.quantized, head, &self.model.head_bias, likeliest);
+        } else {
+            let mut row = vec![0.0f32; config.vocabulary];
+            for (hidden, likeliest) in hidden.chunks_exact(config.width).zip(likeliest) {
+                self.logits_of(hidden, &mut row);
+                *likeliest = argmax(&row);
+            }
+        }
         Ok(true)
     }
 
@@ -889,22 +900,37 @@ impl<'m> Session<'m> {
     fn head(&self, stream: &[f32], room: &mut Room, output: &mut [f32]) {
         let model = self.model;
         let config = model.config;
-        let mut hidden = vec![0.0f32; stream.len()];
-        model.final_norm.apply(stream, config.epsilon, &mut hidden);
+        let hidden = self.normalized(stream);
         if let Some(head) = &model.head {
             room.quantized.quantize(&hidden, config.width, head.scheme().rotation);
             quantized::linear(&room.quantized, head, &model.head_bias, output);
         } else {
-            let Table::Single(embedding) = &model.token_embedding else {
-                unreachable!("a model in single precision, which a model file does not hold, read from one");
-            };
             for (hidden, output) in hidden
                 .chunks_exact(config.width)
                 .zip(output.chunks_exact_mut(config.vocabulary))
             {
-                logits(hidden, embedding, output);
+                self.logits_of(hidden, output);
             }
         }
+    }
+
+    /// Rows of the stream normalized by the last normalization: the output
+    /// layer's inputs.
+    fn normalized(&self, stream: &[f32]) -> Vec<f32> {
+        let mut hidden = vec![0.0f32; stream.len()];
+        self.model
+            .final_norm
+            .apply(stream, self.model.config.epsilon, &mut hidden);
+        hidden
+    }
+
+    /// The logits of a normalized row in single precision: its products with
+    /// the token embedding.
+    fn logits_of(&self, hidden: &[f32], output: &mut [f32]) {
+        let Table::Single(embedding) = &self.model.token_embedding else {
+            unreachable!("a model in single precision, which a model file does not hold, read from one");
+        };
+        logits(hidden, embedding, output);
     }
 
     /// The residual stream of the tokens at the next positions: their tokens'

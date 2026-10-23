@@ -16,6 +16,7 @@
 //! logits.
 
 use kiral_kernels::quantized::{Rotation, Scheme};
+use kiral_kernels::vector::argmax;
 use kiral_model::file::{self, Contents, Kind, Metadata, ModelFile, Panels, Specials, Tensor};
 use kiral_model::json;
 use kiral_model::safetensors::SafeTensors;
@@ -577,7 +578,7 @@ fn a_model_file_of_another_model_is_refused() {
 }
 
 #[test]
-fn a_feed_from_a_row_gives_those_rows_of_a_feed_of_all_and_stops_where_asked() {
+fn the_likeliest_tokens_from_a_row_are_those_of_a_feed_of_all_and_a_feeding_stops_where_asked() {
     let mut random = Random(28);
     let tensors = tensors(&mut random);
     let bytes = file(&tensors);
@@ -588,23 +589,34 @@ fn a_feed_from_a_row_gives_those_rows_of_a_feed_of_all_and_stops_where_asked() {
         let mut all = vec![0.0f32; ids.len() * VOCABULARY];
         Session::new(&model, POSITIONS).feed_all(&ids, &mut all).expect("fed");
         let mut session = Session::new(&model, POSITIONS);
-        let mut tail = vec![0.0f32; 2 * VOCABULARY];
+        let mut likeliest = vec![None; 2];
         let mut blocks = 0;
         let mut stop_at_second = || {
             blocks += 1;
             blocks > 1
         };
         assert!(
-            !session.feed_from(&ids, 4, &mut tail, &mut stop_at_second).expect("fed"),
+            !session
+                .feed_likeliest(&ids, 4, &mut likeliest, &mut stop_at_second)
+                .expect("fed"),
             "stopped"
         );
         assert!(session.is_empty(), "nothing kept of a feeding stopped");
-        assert!(session.feed_from(&ids, 4, &mut tail, &mut || false).expect("fed"));
+        assert_eq!(likeliest, [None, None], "nothing written by a feeding stopped");
+        assert!(
+            session
+                .feed_likeliest(&ids, 4, &mut likeliest, &mut || false)
+                .expect("fed")
+        );
         assert_eq!(session.len(), ids.len());
         // The same rows of the same computation, the output layer left out for
-        // the others.
-        let expected: Vec<f64> = all[4 * VOCABULARY..].iter().copied().map(f64::from).collect();
-        let error = error_of(&tail, &expected);
-        assert!(error <= 1e-6, "{precision:?}: {error}");
+        // the others and its argmax taken as it is summed.
+        let expected: Vec<Option<usize>> = all[4 * VOCABULARY..]
+            .as_chunks::<VOCABULARY>()
+            .0
+            .iter()
+            .map(|row| argmax(row))
+            .collect();
+        assert_eq!(likeliest, expected, "{precision:?}");
     }
 }

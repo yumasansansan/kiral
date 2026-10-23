@@ -42,38 +42,38 @@ So far, the harness that every later step is measured on:
   | Weights | Agree | Acc@1 | CER |
   | --- | ---: | ---: | ---: |
   | 8 bits | 4395 (99.98%) | 87.0 | 1.58 |
-  | 8 bits, rotated in blocks of 256 | 4395 (99.98%) | 86.5 | 1.67 |
-  | 4 bits | 4366 (99.32%) | 80.5 | 2.56 |
-  | 4 bits, scales fitted | 4362 (99.23%) | | |
-  | 4 bits, rotated in blocks of 64, scales fitted | 4367 (99.34%) | | |
-  | 4 bits, rotated in blocks of 256 | 4378 (99.59%) | 82.0 | 2.07 |
-  | 4 bits, rotated in blocks of 256, scales fitted | 4376 (99.55%) | 83.0 | 2.02 |
+  | 8 bits, rotated in blocks of 256 | 4395 (99.98%) | 87.5 | 1.55 |
+  | 4 bits | 4367 (99.34%) | 81.5 | 2.20 |
+  | 4 bits, scales fitted | 4359 (99.16%) | | |
+  | 4 bits, rotated in blocks of 64, scales fitted | 4366 (99.32%) | | |
+  | 4 bits, rotated in blocks of 256 | 4378 (99.59%) | 83.0 | 2.00 |
+  | 4 bits, rotated in blocks of 256, scales fitted | 4377 (99.57%) | 83.0 | 2.06 |
 
-  Eight bits lose nothing and need no rotation: they are what `--int8` takes. At four bits the rotation takes the positions that agree to 99.6% and Acc@1 back from 80.5 to 82.0 (83.0 with the scales fitted, which add nothing to the positions), but not to single precision's 87.0: an item's conversion has some 22 positions and changes with any of them, and half the items that change are lost, so that Acc@1 within a point asks for some 99.9% of them, which only eight bits give. Four bits wait for a quantization calibrated on data.
+  Eight bits lose nothing and need no rotation: they are what `--int8` takes. At four bits the rotation takes the positions that agree to 99.6% and Acc@1 back from 81.5 to 83.0 (the scales fitted besides add nothing to either), but not to single precision's 87.0: an item's conversion has some 22 positions and changes with any of them, and half the items that change are lost, so that Acc@1 within a point asks for some 99.9% of them, which only eight bits give. Four bits wait for a quantization calibrated on data.
 
   Timed with `kiral-tools bench model`, 50 items converted one after another on a pinned core, each prompt fed at once and each step of decoding after it, on the i7-1360P:
 
   | Two runs each | Prompts (37 tokens), p50 | p99 | Steps, p50 | p99 |
   | --- | ---: | ---: | ---: | ---: |
-  | Single precision, P-core (CPU 0, 4.3–4.4 GHz) | 174–182 ms | 482–499 ms | 15.4–15.9 ms | 19.8–20.1 ms |
-  | Integers, portable, P-core (4.3 GHz) | 356–375 ms | 1010–1045 ms | 13.4–14.4 ms | 16.2–17.4 ms |
-  | Integers, AVX-VNNI, P-core (5.0 GHz) | 27.3–27.4 ms | 80.8–82.0 ms | 5.4–5.5 ms | 6.3–6.8 ms |
-  | Single precision, E-core (CPU 8, 3.70 GHz) | 262–266 ms | 739–748 ms | 20.3–20.9 ms | 23.7–26.0 ms |
-  | Integers, portable, E-core | 487 ms | 1400–1405 ms | 22.2–23.3 ms | 24.9–25.6 ms |
-  | Integers, AVX-VNNI, E-core | 88.5–88.6 ms | 265–266 ms | 10.7–11.3 ms | 12.2–12.8 ms |
+  | Single precision, P-core (CPU 0, 4.2–4.3 GHz) | 170–178 ms | 533–536 ms | 14.5 ms | 19.3–21.2 ms |
+  | Integers, portable, P-core (4.3 GHz) | 349–362 ms | 1017–1019 ms | 13.0–13.1 ms | 16.9–17.2 ms |
+  | Integers, AVX-VNNI, P-core (4.2–4.8 GHz) | 21.3–22.9 ms | 67.3–67.6 ms | 4.5–4.7 ms | 6.1–6.9 ms |
+  | Single precision, E-core (CPU 8, 3.70 GHz) | 246–250 ms | 684–696 ms | 17.8–18.0 ms | 21.4–21.7 ms |
+  | Integers, portable, E-core | 472–474 ms | 1361–1362 ms | 20.4 ms | 22.6–22.8 ms |
+  | Integers, AVX-VNNI, E-core | 74.6–76.7 ms | 224–234 ms | 9.2–9.3 ms | 10.9–13.4 ms |
 
-  With AVX-VNNI's `vpdpbusd`, the form the processor runs here, a prompt takes about a sixth of single precision's time on the P-core and a third on the E-core, and a step of decoding about a third and a half: a step reads every weight, 340 MB in single precision and a quarter of that in bytes. The portable form, for processors without VNNI, takes twice as long as single precision over a prompt and about as long over a step.
+  With AVX-VNNI's `vpdpbusd`, the form the processor runs here, a prompt takes about an eighth of single precision's time on the P-core and a third on the E-core, and a step of decoding about a third and a half: a step reads every weight, 340 MB in single precision and a quarter of that in bytes, whereas a prompt's tokens are bound by the products, each some 0.5 ms more on the P-core. The portable form, for processors without VNNI, takes twice as long as single precision over a prompt and about as long over a step.
 
 - KIRAL's model file ([docs/MODEL-FORMAT.md](docs/MODEL-FORMAT.md)): `kiral-tools model convert` writes zenz in integers into one file -- its configuration, its tokenizer, and its weights quantized and packed in the layout the kernels read, each tensor on a line of the caches -- with the license of its weights, their notices and a SHA-256 of itself, which `kiral-tools model check` checks. It is loaded by mapping it (`kiral-sys`): the weights are read where they lie, an embedding's row converted to single precision when it is looked up, and only the normalizations' and the biases' 0.5 MB are copied. zenz-v3.1-small's is 111.9 MB, against 180.9 MB of safetensors in bfloat16, and AJIMEE-Bench converts from it exactly as from the safetensors quantized as they are read: Acc@1 87.0, no conversion changed, 4395 of the 4396 positions agreeing with single precision. Timed with `kiral-tools bench load`, ten loads, each followed by the first item's prompt fed twice, on the i7-1360P:
 
   | Two runs each | Loads, p50 | First prompts after a load, p50 | Second prompts, p50 |
   | --- | ---: | ---: | ---: |
-  | The model file, P-core (CPU 0, 4.6 GHz) | 0.46–0.49 ms | 55.6–55.9 ms | 54.9–55.7 ms |
-  | The safetensors read and quantized, P-core (4.4–4.9 GHz) | 467–535 ms | 55.6–59.0 ms | 55.5–58.6 ms |
-  | The model file, E-core (CPU 8, 3.70 GHz) | 1.23–1.25 ms | 178.9–180.0 ms | 178.1–178.9 ms |
-  | The safetensors read and quantized, E-core | 637–646 ms | 179.3–180.9 ms | 178.8–179.4 ms |
+  | The model file, P-core (CPU 0, 4.5–4.6 GHz) | 0.56–0.57 ms | 42.8–43.1 ms | 40.7–40.9 ms |
+  | The safetensors read and quantized, P-core (4.8 GHz) | 450–452 ms | 41.6–41.9 ms | 41.3–41.4 ms |
+  | The model file, E-core (CPU 8, 3.70 GHz) | 1.31 ms | 154.6–155.0 ms | 151.4–152.1 ms |
+  | The safetensors read and quantized, E-core | 621–627 ms | 152.2–153.1 ms | 150.4–151.5 ms |
 
-  The prompt, of 71 tokens, reads every weight. The first after a load, which takes the mapped file's pages from the system's cache of the file as it touches them, is within 0.2 to 1.2 ms of the second, as the first after reading the safetensors is (0.1 to 1.5 ms). Converting `bench model`'s items, the mapped file is as fast as weights quantized into memory, within what the runs differ by: steps of decoding at 5.3–5.4 ms at the median on the P-core against 5.6–5.9 ms, and 10.0–11.1 ms on the E-core against 10.2–11.9 ms, the P-core's clock between 4.1 and 4.9 GHz at the median of the runs.
+  The prompt, of 71 tokens, reads every weight. The first after a load, which takes the mapped file's pages from the system's cache of the file as it touches them, is 2.2 to 3.2 ms longer than the second, against 0.3 to 1.8 ms after reading the safetensors. Converting `bench model`'s items, the mapped file is as fast as weights quantized into memory, within what the runs differ by: steps of decoding at 5.3–5.4 ms at the median on the P-core against 5.6–5.9 ms, and 10.0–11.1 ms on the E-core against 10.2–11.9 ms, the P-core's clock between 4.1 and 4.9 GHz at the median of the runs.
 
 - Mozc, measured as it is used: `kiral-tools eval --mozc` types each reading in romaji into a Mozc of the run's own -- a profile made for the run and removed after, so that the user's own Mozc learns nothing -- a key at a time through `mozc_emacs_helper`, converts it with Space and cancels it, checking that what was typed is the reading. Mozc 2.29 has Acc@1 47.5 and CER 7.91 (43.0 / 10.29 with left context, which it does not take, 52.0 / 5.54 without). `kiral-tools replay --mozc --cpu p0 --cpu e0` times each key and each conversion, the run pinned to a performance core and then to an efficiency core (`kiral-sys`, `kiral-cpu`), with the clock read beside; on an i7-1360P, the times of answers through Mozc's IPC:
 
@@ -116,15 +116,15 @@ So far, the harness that every later step is measured on:
 
   | Two runs each | Kana, p50 | p99 | Refinements, p50 | p99 | Came before the next key | Space refined in time | Acc@1 of Space |
   | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-  | On AC, P-cores (typing on CPU 0, the worker on CPU 2 at 2.43–2.51 GHz at the median) | 0.142–0.146 ms | 0.49–0.50 ms | 16.4–16.6 ms | 55.8–56.3 ms | 1435 of 1435 | 49–50 of 50 | 84.0–86.0 |
-  | On AC, E-cores (CPU 8, the worker on CPU 9 at 3.64–3.69 GHz) | 0.20 ms | 0.72 ms | 41.0–41.2 ms | 97.9–98.3 ms | 1238–1239 of 1435 | 37–39 of 50 | 78.0 |
+  | On AC, P-cores (typing on CPU 0, the worker on CPU 2 at 2.37–2.48 GHz at the median) | 0.138–0.145 ms | 0.45–0.47 ms | 12.5–12.8 ms | 39.5–41.6 ms | 1435 of 1435 | 50 of 50 | 86.0 |
+  | On AC, E-cores (CPU 8, the worker on CPU 9 at 3.69–3.70 GHz) | 0.20–0.21 ms | 0.69–0.72 ms | 36.6–36.7 ms | 96.6–96.7 ms | 1332–1333 of 1435 | 42 of 50 | 82.0 |
   | On battery, P-cores (the worker at 1.80 GHz) | 0.45–0.47 ms | 1.27–1.50 ms | 42.9–43.4 ms | 95.5–96.6 ms | 1384–1387 of 1435 | 45 of 50 | 82.0 |
   | On battery, E-cores (the worker at 2.20 GHz) | 0.41–0.42 ms | 1.15–1.18 ms | 60.3–60.4 ms | 98.6–98.8 ms | 734–752 of 1435 | 24 of 50 | 64.0–66.0 |
 
-  A key's work on the input thread stays within 2 ms at the 99th percentile while the model works, and within 0.5 ms on a P-core on AC power. A key's refinement feeds the model the reading's new kana, the tag after it and the whole draft again, as zenz's prompt puts the reading before the conversion: on a P-core on AC power it comes after 16.4 to 16.6 ms at the median, about the 15 ms that is the aim, every one before the next key, and on battery, whose cores keep a lower clock between keys, after about three times that. The same 50 items converted with no deadline are right for 43, and Space shows 42 or 43 of them on a P-core on AC power.
+  A key's work on the input thread stays within 2 ms at the 99th percentile while the model works, and within 0.5 ms on a P-core on AC power. A key's refinement feeds the model the reading's new kana, the tag after it and the whole draft again, as zenz's prompt puts the reading before the conversion: on a P-core on AC power it comes after 12.5 to 12.8 ms at the median, within the 15 ms that is the aim, every one before the next key, against 15.7 to 16.3 ms before GELU and the softmax took KIRAL's own exponential (run in turn with it), and on battery, whose cores keep a lower clock between keys, after about three times that. The same 50 items converted with no deadline are right for 43, and Space shows 43 of them on a P-core on AC power. Back to back, without the time between keys (`kiral-tools bench keys`), a key's refinement feeds the model 19.8 tokens on average and takes 12.2 to 12.3 ms at the median on a P-core (CPU 0, 4.1–4.2 GHz) and 38.0 to 40.7 ms on an E-core (CPU 8, 3.70 GHz). Its tokens are bound by the products, not by reading the weights: drafts fed together would each add their own tokens to every key's, and a draft fed in parts would add passes, so that one draft is fed, whole.
 
-- The kernels in single precision (`kiral-kernels`): linear layers on weights packed in panels, layer normalization, GELU, softmax and attention over the cache, in plain Rust that the compiler turns into vector code. Each is tested against double precision, its error held to the bound that the analysis of its roundings gives, at lengths that are not multiples of the vectors' width.
-- The products in integers in assembly for AVX-VNNI (`crates/kiral-kernels/asm/x86_64/qgemm_avx_vnni.S`), the first form in assembly: tiles of one to six rows by sixteen columns, `vpdpbusd` adding four products of bytes to a lane, of three rows or fewer in two sets of sums so that twice the chains run side by side. Tested at every number of rows against double precision, as the portable form is, and run wherever the processor has AVX-VNNI and the environment allows it. With 16 to 40 rows, 179–205 GMAC/s on a P-core of the i7-1360P against the portable form's 8–10, and 46–48 on an E-core against 6.3–6.7 (`kiral-tools bench kernels`).
+- The kernels in single precision (`kiral-kernels`): linear layers on weights packed in panels, layer normalization, GELU, softmax and attention over the cache, in plain Rust that the compiler turns into vector code. Each is tested against double precision, its error held to the bound that the analysis of its roundings gives, at lengths that are not multiples of the vectors' width. The exponential that GELU and the softmax take is computed there too -- the argument less its nearest multiple of ln 2, Cephes' polynomial for what is left, the power of two put in the exponent's bits -- within 1.42 u of double precision on every float of its range (u = 2^-24), so that their loops become vector code as well: taken from the system's library a value at a time, GELU's hyperbolic tangent was a sixth of a key's refinement on a P-core. GELU is computed as `x / (1 + exp(-2z))`, which `x (1 + tanh z) / 2` equals. The inputs of the products in integers are quantized by comparisons and by adding 2^23, which rounds them, in a third of the time that rounding by `round_ties_even` and a saturating conversion took, to the same bytes. `kiral-tools bench kernels` times each.
+- The products in integers in assembly for AVX-VNNI (`crates/kiral-kernels/asm/x86_64/qgemm_avx_vnni.S`), the first form in assembly: tiles of one to six rows by sixteen columns, `vpdpbusd` adding four products of bytes to a lane, of three rows or fewer in two sets of sums so that twice the chains run side by side. Tested at every number of rows against double precision, as the portable form is, and run wherever the processor has AVX-VNNI and the environment allows it. For the output layer, each row keeps only its largest sum as the tiles come (`quantized::likeliest`), the logits of 6000 words never written out: what verification takes of them. With 16 to 40 rows, 179–205 GMAC/s on a P-core of the i7-1360P against the portable form's 8–10, and 46–48 on an E-core against 6.3–6.7 (`kiral-tools bench kernels`).
 - The levels of the instruction set (`kiral-cpu`), as std's detection finds them, and the choice among them that `KIRAL_ISA=<level>` and `KIRAL_KERNELS=portable` hold back.
 - KIRAL's model file, safetensors and JSON read by hand, and SHA-256 written out (`kiral-model`), the parsers taking any bytes: what is not a file of theirs is an error, never a panic.
 
@@ -207,6 +207,10 @@ cargo run --release --locked -p kiral-tools -- replay --model data/models/zenz-v
 ```
 
 ```bash
+cargo run --release --locked -p kiral-tools -- bench keys --model data/models/zenz-v3.1-small-int8.kmdl --dict data/dictionaries/mozc-sudachi.kdic --limit 50 --cpu p0 --cpu e0
+```
+
+```bash
 cargo run --release --locked -p kiral-tools -- eval --mozc
 ```
 
@@ -214,7 +218,7 @@ cargo run --release --locked -p kiral-tools -- eval --mozc
 cargo run --release --locked -p kiral-tools -- replay --mozc --cpu p0 --cpu e0
 ```
 
-The script fetches AJIMEE-Bench, zenz-v3.1-small, Mozc's dictionary and SudachiDict from fixed revisions into `data/`, which is not committed, and checks them against the SHA-256 that `scripts/datasets.sha256` records; `list` shows where each comes from and its terms. `eval` with both `--model` and `--dict` converts with KIRAL's engine, up to `--rounds` rounds (8), and `replay` with both types into it, the worker pinned to the processor after the colon -- on the i7-1360P, `p0` is CPU 0 and `p2` CPU 2, another core (`p1` is CPU 0's other thread). `model convert` writes zenz in integers to `data/models/`; `--source` names where its weights come from, for the file's notices, and `--model` takes the file wherever it takes zenz's directory (`agree` takes it as `--quantized`). `dict build` without `--sudachi` builds Mozc's dictionary alone, and `--lists small_lex.csv,core_lex.csv,notcore_lex.csv` all of SudachiDict's lists. The results of each run go to `bench/results/`, and `bench/baselines.toml` keeps the numbers that runs are compared with. Mozc is measured on Linux, with the package `emacs-mozc-bin` for its helper.
+The script fetches AJIMEE-Bench, zenz-v3.1-small, Mozc's dictionary and SudachiDict from fixed revisions into `data/`, which is not committed, and checks them against the SHA-256 that `scripts/datasets.sha256` records; `list` shows where each comes from and its terms. `eval` with both `--model` and `--dict` converts with KIRAL's engine, up to `--rounds` rounds (8), and `replay` with both types into it, the worker pinned to the processor after the colon -- on the i7-1360P, `p0` is CPU 0 and `p2` CPU 2, another core (`p1` is CPU 0's other thread). `bench keys` times the engine's refinement of each key back to back, without the time between keys, its clock steady. `model convert` writes zenz in integers to `data/models/`; `--source` names where its weights come from, for the file's notices, and `--model` takes the file wherever it takes zenz's directory (`agree` takes it as `--quantized`). `dict build` without `--sudachi` builds Mozc's dictionary alone, and `--lists small_lex.csv,core_lex.csv,notcore_lex.csv` all of SudachiDict's lists. The results of each run go to `bench/results/`, and `bench/baselines.toml` keeps the numbers that runs are compared with. Mozc is measured on Linux, with the package `emacs-mozc-bin` for its helper.
 
 ## License
 

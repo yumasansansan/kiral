@@ -18,13 +18,16 @@
 //! widths that are not multiples of a group, a panel or a rotation, and with
 //! every number of rows a tile of each form may take; the products in every
 //! form the processor runs. Packed weights read back from their bytes, as a
-//! model file holds them, are the same weights.
+//! model file holds them, are the same weights. The likeliest output of each
+//! row is the largest of its products, the first of those equal to it.
 
 use kiral_cpu::Features;
 use kiral_kernels::Form;
 use kiral_kernels::quantized::{
-    GROUP, GROUP_BYTES, INPUT_MAX, PANEL, Packed, QUADS, Rotation, Rows, Scheme, linear, linear_in, rotate,
+    GROUP, GROUP_BYTES, INPUT_MAX, PANEL, Packed, QUADS, Rotation, Rows, Scheme, likeliest_in, linear, linear_in,
+    rotate,
 };
+use kiral_kernels::vector::argmax;
 
 /// The unit roundoff of single precision, 2^-24.
 const U: f64 = 1.0 / 16_777_216.0;
@@ -525,5 +528,61 @@ fn products_are_near_those_of_the_numbers_quantized() {
                 }
             }
         }
+    }
+}
+
+#[test]
+fn the_likeliest_output_is_the_first_largest_of_the_products() {
+    // Every number of rows up to two tiles and more, widths that are not
+    // multiples of a panel or a strip: the same sums as the products', so the
+    // same index as their argmax.
+    let mut random = Random(43);
+    let mut rows = Rows::new();
+    for (depth, width) in [(64, 1), (100, 35), (130, 600)] {
+        let weights = random.values(depth * width);
+        let packed = Packed::quantize(depth, width, Scheme::INT8, |k, j| weights[k * width + j]);
+        let bias = random.values(width);
+        for count in [1, 2, 5, 6, 7, 13] {
+            rows.quantize(&random.values(depth * count), depth, Rotation::None);
+            for form in forms() {
+                let mut output = vec![0.0f32; count * width];
+                linear_in(form, &rows, &packed, &bias, &mut output);
+                let mut likeliest = vec![Some(usize::MAX); count];
+                likeliest_in(form, &rows, &packed, &bias, &mut likeliest);
+                let expected: Vec<Option<usize>> = output.chunks_exact(width).map(argmax).collect();
+                assert_eq!(likeliest, expected, "{form}, {depth}x{width}, {count} rows");
+            }
+        }
+    }
+    // Weights of 0 leave the bias: of equals, the first; NaNs left out; a row
+    // of NaNs alone, none; columns past a panel and in its second strip.
+    let (depth, width) = (3, 40);
+    let packed = Packed::quantize(depth, width, Scheme::INT8, |_, _| 0.0);
+    rows.quantize(&[0.5, -1.0, 2.0], depth, Rotation::None);
+    let cases: [(Vec<f32>, Option<usize>); 4] = [
+        (
+            (0..width).map(|j| if j == 9 || j == 33 { 3.0 } else { 1.0 }).collect(),
+            Some(9),
+        ),
+        (
+            (0..width).map(|j| if j < 20 { f32::NAN } else { -1.0 }).collect(),
+            Some(20),
+        ),
+        (vec![f32::NAN; width], None),
+        (
+            (0..width).map(|j| if j == 39 { f32::INFINITY } else { 0.0 }).collect(),
+            Some(39),
+        ),
+    ];
+    for (bias, expected) in cases {
+        for form in forms() {
+            let mut likeliest = [Some(usize::MAX)];
+            likeliest_in(form, &rows, &packed, &bias, &mut likeliest);
+            assert_eq!(likeliest, [expected], "{form}: {bias:?}");
+        }
+    }
+    rows.quantize(&[], depth, Rotation::None);
+    for form in forms() {
+        likeliest_in(form, &rows, &packed, &[0.0; 40], &mut []);
     }
 }
