@@ -635,3 +635,21 @@ core = "E, typing on CPU 8, 0.40 GHz at the median of both; the worker on CPU 9,
 kana = { count = 1435, p50 = [0.195, 0.194], p99 = [0.719, 0.742] }
 refinements = { count = [932, 931], p50 = [51.801, 51.684], p99 = [98.111, 97.922] }
 conversions = { count = 50, refined = [30, 30], p50 = [11.746, 11.559], p99 = [30.108, 30.112], correct = [37, 37] }
+
+[[kernels]]
+system = "the products in integers of zenz's layers, weights of 8 bits; GMAC/s, the least and the greatest over the five layers"
+source = "kiral-tools bench kernels --rows 1,4,16,40, 2026-10-23, the CI's rust job on a runner of Windows (windows-2025-vs2026), one run, unpinned, the clock not read"
+machine = "AMD EPYC 9V45 96-Core Processor (Zen 5), a GitHub runner"
+core = "unpinned"
+avx512_vnni = { rows_1 = [97.9, 125.5], rows_4_to_40 = [256.4, 328.1] }
+avx_vnni = { rows_1 = [95.1, 125.5], rows_4_to_40 = [189.5, 214.9] }
+avx2 = { rows_1 = [80.8, 86.7], rows_4_to_40 = [111.4, 116.0] }
+portable = { any_rows = [10.0, 10.9] }
+
+[[kernels]]
+system = "the products in integers of zenz's layers, weights of 8 bits; GMAC/s, the least and the greatest over the five layers"
+source = "kiral-tools bench kernels --rows 1,4,16,40, 2026-10-23, the CI's rust job on a runner of Ubuntu (ubuntu-26.04), one run, unpinned, the clock not read"
+machine = "AMD EPYC 7763 64-Core Processor (Zen 3, AVX2 without VNNI), a GitHub runner"
+core = "unpinned"
+avx2 = { rows_1 = [48.9, 54.4], rows_4_to_40 = [78.9, 84.4] }
+portable = { any_rows = [6.6, 6.8] }

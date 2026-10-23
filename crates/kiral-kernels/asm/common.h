@@ -8,7 +8,9 @@
 //
 // What the kernels in assembly need to be one file for every system: Clang's
 // preprocessor runs on each .S before its assembler does, and these macros
-// write what the object formats want differently.
+// write what the object formats want differently -- and, as a macro is one
+// line, its statements apart with what each assembler separates them by: ;
+// but on Apple's AArch64, whose ; starts a comment, %%.
 //
 //     FUNCTION(name)      a global function, aligned to 32 bytes: the name with
 //                         the leading underscore of Mach-O where it is one, its
@@ -43,6 +45,16 @@
 #define END_FUNCTION(name) .size name, . - name
 #define END_FILE .section .note.GNU-stack, "", @progbits
 #define CONSTANTS .section .rodata
+#elif defined(__APPLE__) && defined(__aarch64__)
+// Apple's assembler for AArch64 takes ; for the start of a comment, and %% for
+// what separates two statements on a line.
+#define FUNCTION(name) \
+    .globl _##name %%  \
+    .p2align 5 %%      \
+    _##name:
+#define END_FUNCTION(name)
+#define END_FILE
+#define CONSTANTS .section __TEXT, __const
 #elif defined(__APPLE__)
 #define FUNCTION(name) \
     .globl _##name;    \

@@ -52,7 +52,9 @@
 // two multiplications a quad are AVX-VNNI's one -- and 44 to 84 with one, the
 // portable form 8 to 9 with any; on an E-core at 3.7 GHz, 23 to 26 with any
 // number of rows, against AVX-VNNI's 44 to 48 and the portable form's 6.4 to
-// 6.7. The inputs of seven bits cost zenz-v3.1-small an item of AJIMEE-Bench's
+// 6.7. And by the CI, unpinned, its clock not read, on a processor this form
+// is for, the AMD EPYC 7763 (Zen 3) of a runner of Ubuntu: 79 to 84 with 4 to
+// 40 rows and 49 to 54 with one, against the portable form's 6.6 to 6.8. The inputs of seven bits cost zenz-v3.1-small an item of AJIMEE-Bench's
 // 200, 86.5 against 87.0, every one of 4396 positions of its conversions but
 // one agreeing with single precision, as with eight.
 //

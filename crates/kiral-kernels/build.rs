@@ -10,8 +10,17 @@
 //! into a static library that the crate links: each `.S` of `asm/<arch>/` by
 //! Clang, through its preprocessor and `asm/common.h`, for the target's triple,
 //! then the objects archived by `llvm-ar`. The LLVM the project builds with has
-//! both: `clang` and `llvm-ar` on `PATH`, or the programs `KIRAL_CLANG` and
-//! `KIRAL_AR` name. An architecture with no kernels in assembly gets no library.
+//! them: `clang`, `llvm-ar` and `llvm-nm` on `PATH`, or the programs
+//! `KIRAL_CLANG`, `KIRAL_AR` and `KIRAL_NM` name. An architecture with no
+//! kernels in assembly gets no library.
+//!
+//! The kernels are leaf functions that refer to nothing outside their own
+//! file, so that an object with a symbol it does not define is a kernel the
+//! assembler took otherwise than written -- as Apple's assembler for AArch64,
+//! whose `;` starts a comment, once dropped every function's label after a
+//! `;` of `asm/common.h` and left the names declared and never defined, which
+//! only the link on that system found. `llvm-nm` lists each object's undefined
+//! symbols, and the build stops on any.
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -20,6 +29,7 @@ fn main() {
     println!("cargo::rerun-if-changed=asm");
     println!("cargo::rerun-if-env-changed=KIRAL_CLANG");
     println!("cargo::rerun-if-env-changed=KIRAL_AR");
+    println!("cargo::rerun-if-env-changed=KIRAL_NM");
     let architecture = std::env::var("CARGO_CFG_TARGET_ARCH").expect("Cargo names the target's architecture");
     let Ok(entries) = std::fs::read_dir(Path::new("asm").join(&architecture)) else {
         return;
@@ -37,6 +47,7 @@ fn main() {
     let out = PathBuf::from(std::env::var_os("OUT_DIR").expect("Cargo names the output directory"));
     let clang = std::env::var("KIRAL_CLANG").unwrap_or_else(|_| "clang".to_owned());
     let archiver = std::env::var("KIRAL_AR").unwrap_or_else(|_| "llvm-ar".to_owned());
+    let lister = std::env::var("KIRAL_NM").unwrap_or_else(|_| "llvm-nm".to_owned());
     let mut objects = Vec::with_capacity(sources.len());
     for source in &sources {
         println!("cargo::rerun-if-changed={}", source.display());
@@ -48,6 +59,18 @@ fn main() {
             .arg(source)
             .arg("-o")
             .arg(&object));
+        let undefined = output(
+            Command::new(&lister)
+                .args(["--undefined-only", "--format=just-symbols"])
+                .arg(&object),
+        );
+        assert!(
+            undefined.trim().is_empty(),
+            "{} declares symbols it does not define, as an assembler that took its lines otherwise than written \
+             would leave them: {}",
+            source.display(),
+            undefined.split_whitespace().collect::<Vec<_>>().join(", ")
+        );
         objects.push(object);
     }
     // The name MSVC's linker looks for, and the one of every other.
@@ -62,6 +85,16 @@ fn main() {
     run(Command::new(&archiver).arg("crs").arg(&library).args(&objects));
     println!("cargo::rustc-link-search=native={}", out.display());
     println!("cargo::rustc-link-lib=static=kiral_asm");
+}
+
+/// Runs a program of the toolchain and returns what it writes, and stops the
+/// build where it fails.
+fn output(command: &mut Command) -> String {
+    let output = command
+        .output()
+        .unwrap_or_else(|error| panic!("{command:?} could not run: {error}"));
+    assert!(output.status.success(), "{command:?} failed: {}", output.status);
+    String::from_utf8_lossy(&output.stdout).into_owned()
 }
 
 /// Runs a program of the toolchain, and stops the build where it fails.

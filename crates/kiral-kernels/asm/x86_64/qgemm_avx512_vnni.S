@@ -37,10 +37,13 @@
 // rows or more, rax row 3's bytes and r11 row 3's floats. The kernels touch no
 // other memory than their operands', and rsp not at all.
 //
-// Not measured here: the i7-1360P this was written on has no AVX-512, and
-// Intel's SDE checks the results of its models of Ice Lake and Sapphire Rapids
-// (ci/emulated.sh) but not their speed; the CI's runners measure it where they
-// have AVX-512 (kiral-tools bench kernels).
+// Measured by the CI with kiral-tools bench kernels on zenz's five layers,
+// unpinned, its clock not read, on the AMD EPYC 9V45 (Zen 5) of a runner of
+// Windows (2026-10-23): 256 to 328 GMAC/s with 4 to 40 rows and 98 to 126 with
+// one, against AVX-VNNI's 190 to 215 and 95 to 126 on the same runner and the
+// portable form's 10 to 11. The i7-1360P this was written on has no AVX-512;
+// Intel's SDE checks the kernel's results as Ice Lake and Sapphire Rapids
+// (ci/emulated.sh).
 //
 // Assembled by Clang, in Intel's syntax.
 
