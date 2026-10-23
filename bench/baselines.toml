@@ -64,43 +64,51 @@ without_context = { accuracy = 91.0, cer = 0.69 }
 
 [[ajimee]]
 system = "KIRAL's engine: the dictionary's drafts (mozc-sudachi) verified by zenz-v3.1-small in integers (its model file), up to 1 round (--rounds 1)"
-source = "kiral-tools eval --model --dict, 2026-10-23"
-accuracy = 72.0
-cer = 3.52
-with_context = { accuracy = 68.0, cer = 4.48 }
-without_context = { accuracy = 76.0, cer = 2.55 }
+source = "kiral-tools eval --model --dict, 2026-10-23, numbers of more than a digit made in the lattice"
+accuracy = 73.0
+cer = 3.53
+with_context = { accuracy = 69.0, cer = 4.48 }
+without_context = { accuracy = 77.0, cer = 2.59 }
 
 [[ajimee]]
 system = "KIRAL's engine: the dictionary's drafts (mozc-sudachi) verified by zenz-v3.1-small in integers (its model file), up to 2 rounds (--rounds 2)"
-source = "kiral-tools eval --model --dict, 2026-10-23"
-accuracy = 81.5
-cer = 2.32
-with_context = { accuracy = 76.0, cer = 3.34 }
-without_context = { accuracy = 87.0, cer = 1.29 }
+source = "kiral-tools eval --model --dict, 2026-10-23, numbers of more than a digit made in the lattice"
+accuracy = 82.5
+cer = 2.12
+with_context = { accuracy = 77.0, cer = 3.19 }
+without_context = { accuracy = 88.0, cer = 1.05 }
 
 [[ajimee]]
 system = "KIRAL's engine: the dictionary's drafts (mozc-sudachi) verified by zenz-v3.1-small in integers (its model file), up to 3 rounds (--rounds 3)"
-source = "kiral-tools eval --model --dict, 2026-10-23"
-accuracy = 83.5
-cer = 1.96
-with_context = { accuracy = 78.0, cer = 2.88 }
-without_context = { accuracy = 89.0, cer = 1.03 }
+source = "kiral-tools eval --model --dict, 2026-10-23, numbers of more than a digit made in the lattice"
+accuracy = 84.5
+cer = 1.81
+with_context = { accuracy = 79.0, cer = 2.83 }
+without_context = { accuracy = 90.0, cer = 0.79 }
 
 [[ajimee]]
 system = "KIRAL's engine: the dictionary's drafts (mozc-sudachi) verified by zenz-v3.1-small in integers (its model file), up to 4 rounds (--rounds 4)"
-source = "kiral-tools eval --model --dict, 2026-10-23"
-accuracy = 83.5
-cer = 1.9
-with_context = { accuracy = 78.0, cer = 2.81 }
-without_context = { accuracy = 89.0, cer = 0.99 }
+source = "kiral-tools eval --model --dict, 2026-10-23, numbers of more than a digit made in the lattice"
+accuracy = 85.0
+cer = 1.64
+with_context = { accuracy = 80.0, cer = 2.53 }
+without_context = { accuracy = 90.0, cer = 0.75 }
 
 [[ajimee]]
 system = "KIRAL's engine: the dictionary's drafts (mozc-sudachi) verified by zenz-v3.1-small in integers (its model file), up to 8 rounds (--rounds 8)"
-source = "kiral-tools eval --model --dict, 2026-10-23"
-accuracy = 84.0
-cer = 1.91
-with_context = { accuracy = 78.0, cer = 2.9 }
-without_context = { accuracy = 90.0, cer = 0.93 }
+source = "kiral-tools eval --model --dict, 2026-10-23, numbers of more than a digit made in the lattice"
+accuracy = 86.0
+cer = 1.68
+with_context = { accuracy = 81.0, cer = 2.66 }
+without_context = { accuracy = 91.0, cer = 0.69 }
+
+[[ajimee]]
+system = "KIRAL's engine: the dictionary's drafts (mozc-sudachi) verified by zenz-v3.1-small in integers (its model file), up to 16 rounds (--rounds 16), as with any more: 13 at most"
+source = "kiral-tools eval --model --dict, 2026-10-23, numbers of more than a digit made in the lattice"
+accuracy = 86.5
+cer = 1.53
+with_context = { accuracy = 82.0, cer = 2.37 }
+without_context = { accuracy = 91.0, cer = 0.69 }
 
 [[ajimee]]
 system = "zenz-v3.1-small alone in integers, weights of 8 bits rotated in blocks of 256 by regular Hadamard matrices (--int8 --rotate 256)"
@@ -256,20 +264,20 @@ kana = { count = 5820, p50 = 0.046, p99 = 0.272 }
 conversions = { count = 200, p50 = 0.059, p99 = 0.302 }
 
 [[replay]]
-system = "KIRAL's dictionary alone (mozc-sudachi, SudachiDict's core nouns): a kana at a time, each prefix converted from its lattice up"
-source = "kiral-tools replay --dict, 2026-10-23, the middle of three runs by the kana's p99"
+system = "KIRAL's dictionary alone (mozc-sudachi, SudachiDict's core nouns): a kana at a time, each prefix converted from its lattice up, numbers of more than a digit made in the lattice"
+source = "kiral-tools replay --dict, 2026-10-23, two runs on AC power in turn with the build before numbers (P 0.034 ms at the median, 0.232 and 0.248 at the 99th percentile; E 0.054 and 0.053, 0.330 and 0.328)"
 machine = "Intel Core i7-1360P, Ubuntu 26.10"
-core = "P, CPU 0, pinned, 4.87 GHz at the median"
-kana = { count = 5820, p50 = 0.032, p99 = 0.235 }
-conversions = { count = 200, p50 = 0.040, p99 = 0.242 }
+core = "P, CPU 0, pinned, 4.50 GHz at the median"
+kana = { count = 5820, p50 = [0.04, 0.04], p99 = [0.279, 0.274] }
+conversions = { count = 200, p50 = [0.049, 0.05], p99 = [0.285, 0.306] }
 
 [[replay]]
-system = "KIRAL's dictionary alone (mozc-sudachi, SudachiDict's core nouns): a kana at a time, each prefix converted from its lattice up"
-source = "kiral-tools replay --dict, 2026-10-23, the middle of three runs by the kana's p99"
+system = "KIRAL's dictionary alone (mozc-sudachi, SudachiDict's core nouns): a kana at a time, each prefix converted from its lattice up, numbers of more than a digit made in the lattice"
+source = "kiral-tools replay --dict, 2026-10-23, two runs on AC power in turn with the build before numbers"
 machine = "Intel Core i7-1360P, Ubuntu 26.10"
-core = "E, CPU 8, pinned, 3.69 GHz at the median"
-kana = { count = 5820, p50 = 0.055, p99 = 0.330 }
-conversions = { count = 200, p50 = 0.071, p99 = 0.358 }
+core = "E, CPU 8, pinned, 3.70 GHz at the median"
+kana = { count = 5820, p50 = [0.064, 0.065], p99 = [0.374, 0.387] }
+conversions = { count = 200, p50 = [0.082, 0.086], p99 = [0.412, 0.444] }
 
 [[replay]]
 system = "Mozc 2.28 (Ubuntu 24.04), conversions only, its IPC included"
@@ -278,25 +286,25 @@ conversions = { p50 = 2.1 }
 
 [[replay]]
 system = "KIRAL's engine: the dictionary's drafts (mozc-sudachi) refined by zenz-v3.1-small in integers (its model file) on a worker, a round a key, a kana every 100 ms; Space waits 30 ms for up to 8 rounds"
-source = "kiral-tools replay --model --dict --limit 50, 2026-10-23, two runs, on AC power (energy preference performance), the package at 87 to 91 C as the runs began"
+source = "kiral-tools replay --model --dict --limit 50, 2026-10-23, two runs, on AC power (energy preference performance), the package at 79 to 82 C as the runs began, numbers of more than a digit made in the lattice (before them: kana p99 0.439 and 0.468 ms, refinements p50 16.36 and 15.104 ms, 42 and 42 right)"
 machine = "Intel Core i7-1360P, Ubuntu 26.10"
-core = "P, typing on CPU 0, 1.67 and 1.59 GHz at the median; the worker on CPU 2, pinned, 3.20 and 2.69 GHz at the median"
-kana = { count = 1435, p50 = [0.139, 0.139], p99 = [0.439, 0.468] }
-refinements = { count = [1435, 1435], p50 = [16.36, 15.104], p99 = [51.916, 52.977] }
-conversions = { count = 50, refined = 50, p50 = [0.59, 0.482], p99 = [28.508, 28.593], correct = [42, 42] }
+core = "P, typing on CPU 0, 1.54 and 1.16 GHz at the median; the worker on CPU 2, pinned, 2.51 and 2.43 GHz at the median"
+kana = { count = 1435, p50 = [0.146, 0.142], p99 = [0.492, 0.499] }
+refinements = { count = [1435, 1435], p50 = [16.395, 16.564], p99 = [56.343, 55.826] }
+conversions = { count = 50, refined = [49, 50], p50 = [0.57, 0.594], p99 = [30.06, 28.543], correct = [42, 43] }
 
 [[replay]]
 system = "KIRAL's engine: the dictionary's drafts (mozc-sudachi) refined by zenz-v3.1-small in integers (its model file) on a worker, a round a key, a kana every 100 ms; Space waits 30 ms for up to 8 rounds"
-source = "kiral-tools replay --model --dict --limit 50, 2026-10-23, two runs, on AC power (energy preference performance), the package at 87 to 91 C as the runs began"
+source = "kiral-tools replay --model --dict --limit 50, 2026-10-23, two runs, on AC power (energy preference performance), the package at 79 to 82 C as the runs began, numbers of more than a digit made in the lattice (before them: refinements p50 39.48 and 39.787 ms, 39 and 39 right)"
 machine = "Intel Core i7-1360P, Ubuntu 26.10"
-core = "E, typing on CPU 8, 2.57 and 3.23 GHz at the median; the worker on CPU 9, pinned, 3.70 and 3.69 GHz at the median"
-kana = { count = 1435, p50 = [0.182, 0.186], p99 = [0.724, 0.694] }
-refinements = { count = [1236, 1243], p50 = [39.48, 39.787], p99 = [97.701, 98.19] }
-conversions = { count = 50, refined = 38, p50 = [0.707, 0.714], p99 = [30.107, 30.109], correct = [39, 39] }
+core = "E, typing on CPU 8, 2.92 and 2.46 GHz at the median; the worker on CPU 9, pinned, 3.64 and 3.69 GHz at the median"
+kana = { count = 1435, p50 = [0.202, 0.198], p99 = [0.716, 0.719] }
+refinements = { count = [1239, 1238], p50 = [41.033, 41.249], p99 = [98.344, 97.9] }
+conversions = { count = 50, refined = [37, 39], p50 = [0.762, 0.765], p99 = [30.11, 30.135], correct = [39, 39] }
 
 [[replay]]
 system = "KIRAL's engine: the dictionary's drafts (mozc-sudachi) refined by zenz-v3.1-small in integers (its model file) on a worker, a round a key, a kana every 100 ms; Space waits 30 ms for up to 8 rounds"
-source = "kiral-tools replay --model --dict --limit 50, 2026-10-23, two runs, on battery (energy preference balance_power)"
+source = "kiral-tools replay --model --dict --limit 50, 2026-10-23, two runs, on battery (energy preference balance_power), before numbers of more than a digit were made in the lattice"
 machine = "Intel Core i7-1360P, Ubuntu 26.10"
 core = "P, typing on CPU 0, 0.46 and 0.43 GHz at the median; the worker on CPU 2, pinned, 1.80 GHz at the median of both"
 kana = { count = 1435, p50 = [0.451, 0.465], p99 = [1.266, 1.5] }
@@ -305,7 +313,7 @@ conversions = { count = 50, refined = 45, p50 = [1.528, 1.63], p99 = [30.217, 30
 
 [[replay]]
 system = "KIRAL's engine: the dictionary's drafts (mozc-sudachi) refined by zenz-v3.1-small in integers (its model file) on a worker, a round a key, a kana every 100 ms; Space waits 30 ms for up to 8 rounds"
-source = "kiral-tools replay --model --dict --limit 50, 2026-10-23, two runs, on battery (energy preference balance_power)"
+source = "kiral-tools replay --model --dict --limit 50, 2026-10-23, two runs, on battery (energy preference balance_power), before numbers of more than a digit were made in the lattice"
 machine = "Intel Core i7-1360P, Ubuntu 26.10"
 core = "E, typing on CPU 8, 0.40 GHz at the median; the worker on CPU 9, pinned, 2.20 GHz at the median of both"
 kana = { count = 1435, p50 = [0.416, 0.406], p99 = [1.18, 1.147] }

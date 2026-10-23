@@ -13,8 +13,10 @@
 //! Within a constraint, the cheapest path [`Lattice::best_within`] finds is the
 //! cheapest of those whose text the constraint admits, and there is none where
 //! no path's text is admitted, on dictionaries with digits read in kana and
-//! suffixes, whose texts depend on the next word. And the texts of paths: words
-//! written as typed, digits read in kana.
+//! suffixes, each digit a node for each spelling; the best path spells each as
+//! the suffix after it has it spelt. And the texts of paths: words written as
+//! typed, digits read in kana, numbers read in kana made of the dictionary's
+//! numerals.
 
 use std::collections::BTreeSet;
 
@@ -22,7 +24,7 @@ use kiral_dict::Dictionary;
 use kiral_dict::file::{Unknown, build};
 use kiral_dict::mozc::{self, Matrix};
 use kiral_dict::{Metadata, Word};
-use kiral_lattice::{Constraint, Lattice};
+use kiral_lattice::{Constraint, Lattice, Spelling};
 
 /// `SplitMix64`: a fixed stream of numbers, the same on every system.
 struct Random(u64);
@@ -211,12 +213,26 @@ fn the_best_path_within_a_constraint_is_the_cheapest_it_admits() {
                     (cheapest, found) => panic!("{context}: {cheapest:?} against {found:?}"),
                 }
             }
+            let best = lattice.best(&dictionary);
             assert_eq!(
                 lattice
                     .best_within(&dictionary, &Constraint::default())
                     .map(|path| path.cost),
-                Some(lattice.best(&dictionary).cost)
+                Some(best.cost)
             );
+            // A digit in Arabic numerals before a suffix, in kanji before
+            // anything else.
+            for (number, &node) in best.nodes.iter().enumerate() {
+                let suffix_after = best
+                    .nodes
+                    .get(number + 1)
+                    .is_some_and(|&next| lattice.nodes()[next].flags & mozc::SUFFIX != 0);
+                match lattice.nodes()[node].spelling {
+                    Spelling::Arabic => assert!(suffix_after, "round {round}, {reading}"),
+                    Spelling::Kanji => assert!(!suffix_after, "round {round}, {reading}"),
+                    Spelling::None => {}
+                }
+            }
         }
     }
 }
@@ -283,4 +299,98 @@ fn digits_read_in_kana_are_written_in_kanji_unless_a_suffix_follows() {
         assert!(lattice.reaches(reached, true), "{reached}");
     }
     assert!(!lattice.reaches("壱の", false));
+}
+
+#[test]
+fn numbers_read_in_kana_are_made_of_the_dictionarys_numerals() {
+    let word = |reading: &str, surface: &str, id: u16, cost: u16, flags: u16| Word {
+        reading: reading.to_owned(),
+        surface: surface.to_owned(),
+        lid: id,
+        rid: id,
+        cost,
+        flags,
+    };
+    // Classes: 1 the unknown word, 2 the digits in kanji, 3 十, 4 the suffix
+    // 年, 5 万, 6 the digits in Arabic numerals, which, as in Mozc's matrix, are
+    // dear before a numeral.
+    let words = [
+        word("よん", "四", 2, 400, 0),
+        word("ご", "五", 2, 500, 0),
+        word("いち", "一", 2, 300, 0),
+        word("じゅう", "十", 3, 300, 0),
+        word("まん", "万", 5, 50, 0),
+        word("ねん", "年", 4, 100, mozc::SUFFIX),
+        word("よん", "4", 6, 200, mozc::DIGIT),
+        word("ろく", "ロク", 1, 900, 0),
+    ];
+    let ids: u16 = 7;
+    let mut costs = vec![10u16; usize::from(ids) * usize::from(ids)];
+    costs[2 * usize::from(ids) + 3] = 7;
+    costs[3 * usize::from(ids) + 2] = 9;
+    for numeral in [2, 3, 5, 6] {
+        costs[6 * usize::from(ids) + numeral] = 5000;
+    }
+    let matrix = Matrix { ids, costs };
+    let metadata = Metadata {
+        name: "test",
+        license: "CC0-1.0",
+        source: "made by the test",
+        notice: "",
+    };
+    let bytes = build(&words, &matrix, Unknown { id: 1, cost: 8000 }, &metadata).expect("a dictionary");
+    let dictionary = Dictionary::parse(&bytes).expect("a dictionary");
+    let text = |reading: &str| {
+        let lattice = Lattice::new(&dictionary, reading);
+        lattice.text(&lattice.best(&dictionary))
+    };
+    // 四十五 costs its numerals and their connections, 四 to 十 and 十 to 五, less
+    // one a connection.
+    let lattice = Lattice::new(&dictionary, "よんじゅうご");
+    let spelt: Vec<(String, u32, Spelling)> = lattice
+        .nodes()
+        .iter()
+        .filter(|node| node.begin == 0 && node.end == 6)
+        .map(|node| {
+            let mut spelling = String::new();
+            lattice.push_text(node, &mut spelling);
+            (spelling, node.cost, node.spelling)
+        })
+        .collect();
+    assert_eq!(
+        spelt,
+        [
+            ("四十五".to_owned(), 400 + 6 + 300 + 8 + 500, Spelling::Kanji),
+            ("45".to_owned(), 400 + 6 + 300 + 8 + 500, Spelling::Arabic),
+        ]
+    );
+    assert_eq!(text("よんじゅうご"), "四十五");
+    assert_eq!(text("よんじゅうごねん"), "45年");
+    assert_eq!(text("よんねん"), "4年");
+    assert_eq!(text("よん"), "四");
+    let lattice = Lattice::new(&dictionary, "よんじゅうごねん");
+    for reached in ["45年", "四十五年"] {
+        assert!(lattice.reaches(reached, true), "{reached}");
+    }
+    let within = |reading: &str, prefix: &str| {
+        let lattice = Lattice::new(&dictionary, reading);
+        let constraint = Constraint {
+            prefix: prefix.as_bytes().to_vec(),
+            complete: false,
+        };
+        lattice
+            .best_within(&dictionary, &constraint)
+            .map(|path| lattice.text(&path))
+    };
+    assert_eq!(within("よんじゅうご", "4").as_deref(), Some("45"));
+    assert_eq!(within("よんじゅうごねん", "四十五").as_deref(), Some("四十五年"));
+    // From ten thousand on, the sections in Arabic numerals and the units in
+    // kanji besides, before the number in Arabic numerals alone.
+    assert_eq!(text("いちまんねん"), "1万年");
+    assert_eq!(text("いちまん"), "一万");
+    assert_eq!(within("いちまん", "10000").as_deref(), Some("10000"));
+    // A number of a numeral the dictionary lacks is not made: ろく is no 六.
+    let lattice = Lattice::new(&dictionary, "ろくじゅう");
+    assert!(!lattice.reaches("60", true));
+    assert!(!lattice.reaches("六十", false));
 }

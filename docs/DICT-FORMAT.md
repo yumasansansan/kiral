@@ -128,3 +128,18 @@ A path's cost is the sum of its words' costs and of its connections', from the
 beginning of the sentence before its first word to the end after its last. A
 character that no reading of the dictionary covers is taken as a word of one
 character, of the header's id and cost, written as the input wrote it.
+
+## Numbers
+
+A number of more than a digit said in kana -- よんじゅうご, せんきゅうひゃくきゅうじゅういち,
+いちまん -- is taken as one word made of the numerals that the dictionary has for
+its words: an entry whose surface is the one numeral (一 to 九, 十, 百, 千, 万,
+億, 兆) for the stretch each word reads, its cheapest. The word costs what its
+numerals cost and the connections between them, less one a connection, so that
+the number said whole costs less than its parts; its class on the left is its
+first numeral's, and on its right its last's. It is written in Arabic numerals
+(45), in kanji (四十五), and, from ten thousand on, with its sections in Arabic
+numerals and its units in kanji (1万, the number in Arabic numerals alone costing
+one more). A digit read in kana and such a number are written in Arabic numerals
+where a word of flag 4 follows, and in kanji elsewhere; a conversion within a
+model's constraint may take either.

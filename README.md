@@ -82,7 +82,7 @@ So far, the harness that every later step is measured on:
   | P-core (CPU 0, 4.76 GHz at the median) | 0.83 ms | 3.79 ms | 1.36 ms | 7.64 ms |
   | E-core (CPU 8, 3.70 GHz at the median) | 1.25 ms | 5.71 ms | 2.14 ms | 11.11 ms |
 
-- KIRAL's dictionary (`kiral-dict`) and lattice (`kiral-lattice`): `kiral-tools dict build` makes a dictionary file of Mozc's open-source dictionary and the nouns of [SudachiDict](https://github.com/WorksApplications/SudachiDict) that Mozc's lacks -- their words, keyed by their readings in a double-array trie, and the costs of the connections between their classes -- which is read where it lies ([docs/DICT-FORMAT.md](docs/DICT-FORMAT.md)). SudachiDict's nouns take the class of Mozc's that their part of speech corresponds to, and the cost under which nine in ten of Mozc's words of that class lie. A reading's lattice holds every word whose reading is a stretch of it, and Viterbi finds its cheapest path; a digit read in kana is written in kanji, as Mozc shows it, unless a suffix follows it (いち alone as 一, いちねん as 1年). The dictionary alone, with no context, against AJIMEE-Bench's 200 items, and the oracle, the items that have an accepted conversion that is a path of their lattice:
+- KIRAL's dictionary (`kiral-dict`) and lattice (`kiral-lattice`): `kiral-tools dict build` makes a dictionary file of Mozc's open-source dictionary and the nouns of [SudachiDict](https://github.com/WorksApplications/SudachiDict) that Mozc's lacks -- their words, keyed by their readings in a double-array trie, and the costs of the connections between their classes -- which is read where it lies ([docs/DICT-FORMAT.md](docs/DICT-FORMAT.md)). SudachiDict's nouns take the class of Mozc's that their part of speech corresponds to, and the cost under which nine in ten of Mozc's words of that class lie. A reading's lattice holds every word whose reading is a stretch of it, and Viterbi finds its cheapest path. A number of more than a digit read in kana (よんじゅうご) is a word of the lattice too, made of the numerals the dictionary has for its words (四, 十, 五) and costing what they and their connections cost, less one a connection, so that it is read whole where they would read it; it is written in Arabic numerals or in kanji (45 or 四十五), and from ten thousand on with its units in kanji (100万). The cheapest path writes a number, a digit read in kana among them, in kanji unless a suffix follows it, as Mozc shows it (いち alone as 一, いちねん as 1年); the search within a model's constraint takes either. The dictionary alone, with no context, against AJIMEE-Bench's 200 items, and the oracle, the items that have an accepted conversion that is a path of their lattice:
 
   | The dictionary alone | Entries | File | Acc@1 | CER | Oracle |
   | --- | ---: | ---: | ---: | ---: | ---: |
@@ -92,33 +92,36 @@ So far, the harness that every later step is measured on:
 
   With SudachiDict's core lists, which `--sudachi` reads unless told otherwise: 50.0 / 8.28 with left context, 57.0 / 4.64 without; 20 items right that Mozc 2.29 has wrong and 8 wrong that it has right (McNemar's p 0.036). Typed a kana at a time, each prefix converted from its lattice up, on the i7-1360P:
 
-  | Mozc's, and SudachiDict's core nouns | Kana, p50 | p99 | Conversions, p50 | p99 |
+  | Mozc's, and SudachiDict's core nouns, two runs each | Kana, p50 | p99 | Conversions, p50 | p99 |
   | --- | ---: | ---: | ---: | ---: |
-  | P-core (CPU 0, 4.87 GHz at the median) | 0.032 ms | 0.235 ms | 0.040 ms | 0.242 ms |
-  | E-core (CPU 8, 3.69 GHz at the median) | 0.055 ms | 0.330 ms | 0.071 ms | 0.358 ms |
+  | P-core (CPU 0, 4.50 GHz at the median) | 0.040 ms | 0.274–0.279 ms | 0.049–0.050 ms | 0.285–0.306 ms |
+  | E-core (CPU 8, 3.70 GHz at the median) | 0.064–0.065 ms | 0.374–0.387 ms | 0.082–0.086 ms | 0.412–0.444 ms |
+
+  The numbers cost a kana a fifth more than the lattice of words alone did, run in turn with it (0.034 ms at the median and 0.232–0.248 ms at the 99th percentile on the P-core, 0.053–0.054 and 0.328–0.330 ms on the E-core), and change none of the dictionary's conversions alone: they come into play where a model wants them.
 
 - KIRAL's engine (`kiral-engine`): the dictionary's conversion is a draft that zenz verifies, as Zenzai does. The model is fed the prompt and the draft's tokens at once -- the keys and values of what the sequence shares with the one fed before kept -- and the draft stands where each of its tokens, and the end of text after them, is the model's likeliest. At the first that is not, what the model accepted and the token it wants instead become a constraint on the text, and the lattice is searched again for the cheapest path that keeps it (`Lattice::best_within`), round after round, until the model accepts the draft or wants a text no path has. The conversion is a path of the lattice whatever happens. zenz-v3.1-small in integers, from its model file, and the dictionary of Mozc's and SudachiDict's core nouns, against AJIMEE-Bench's 200 items, each converted as an explicit conversion with no deadline:
 
   | Rounds at most | Acc@1 | CER | Rounds an item |
   | ---: | ---: | ---: | ---: |
-  | 1 | 72.0 | 3.52 | 1.00 |
-  | 2 | 81.5 | 2.32 | 1.49 |
-  | 3 | 83.5 | 1.96 | 1.69 |
-  | 4 | 83.5 | 1.90 | 1.75 |
-  | 8 | 84.0 | 1.91 | 1.79 |
+  | 1 | 73.0 | 3.53 | 1.00 |
+  | 2 | 82.5 | 2.12 | 1.51 |
+  | 3 | 84.5 | 1.81 | 1.74 |
+  | 4 | 85.0 | 1.64 | 1.82 |
+  | 8 | 86.0 | 1.68 | 1.90 |
+  | 16 | 86.5 | 1.53 | 1.92 |
 
-  No item takes more than 7 rounds. The model accepts the draft of 186 items, and each of them is zenz's own conversion; the 14 others end where the model wants a text the dictionary cannot write, and six of those zenz alone converts right (87.0): five multi-digit numbers (45, 1991, 50, 10, 2005 and 26), as the dictionary's digits read in kana are single, and 夜駆け, which it lacks. No item is right that zenz alone has wrong.
+  No item takes more than 13 rounds, the one that writes 50cm three times. With them all, the model accepts the draft of 193 items, and each of them is zenz's own conversion; the 7 others end where the model wants a text the dictionary cannot write, and one of those zenz alone converts right (87.0): 夜駆け, which the dictionary lacks. No item is right that zenz alone has wrong. Before the lattice made numbers of more than a digit, five more items ended so -- 45, 1991, 50, 10, 2005 and 26 -- and the engine converted 84.0 with 8 rounds and with any more.
 
-  Typed live (`kiral-tools replay`), a kana every 100 ms: the input thread drafts each key from its lattice, within the constraint of the last refinement, and posts the reading to a worker, which refines it by a round and gives it back unless a later key has made it stale -- it asks before each block of the model -- and Space waits up to 30 ms for a refinement of up to 8 rounds. 50 items, two runs each, on the i7-1360P on AC power (the energy preference `performance`) and on battery (`balance_power`), the worker on a core of its own of the same kind:
+  Typed live (`kiral-tools replay`), a kana every 100 ms: the input thread drafts each key from its lattice, within the constraint of the last refinement, and posts the reading to a worker, which refines it by a round and gives it back unless a later key has made it stale -- it asks before each block of the model -- and Space waits up to 30 ms for a refinement of up to 8 rounds. 50 items, two runs each, on the i7-1360P on AC power (the energy preference `performance`), and on battery (`balance_power`) before the lattice made numbers, the worker on a core of its own of the same kind:
 
   | Two runs each | Kana, p50 | p99 | Refinements, p50 | p99 | Came before the next key | Space refined in time | Acc@1 of Space |
   | --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
-  | On AC, P-cores (typing on CPU 0, the worker on CPU 2 at 2.69–3.20 GHz at the median) | 0.139 ms | 0.44–0.47 ms | 15.1–16.4 ms | 51.9–53.0 ms | 1435 of 1435 | 50 of 50 | 84.0 |
-  | On AC, E-cores (CPU 8, the worker on CPU 9 at 3.69–3.70 GHz) | 0.18–0.19 ms | 0.69–0.72 ms | 39.5–39.8 ms | 97.7–98.2 ms | 1236–1243 of 1435 | 38 of 50 | 78.0 |
+  | On AC, P-cores (typing on CPU 0, the worker on CPU 2 at 2.43–2.51 GHz at the median) | 0.142–0.146 ms | 0.49–0.50 ms | 16.4–16.6 ms | 55.8–56.3 ms | 1435 of 1435 | 49–50 of 50 | 84.0–86.0 |
+  | On AC, E-cores (CPU 8, the worker on CPU 9 at 3.64–3.69 GHz) | 0.20 ms | 0.72 ms | 41.0–41.2 ms | 97.9–98.3 ms | 1238–1239 of 1435 | 37–39 of 50 | 78.0 |
   | On battery, P-cores (the worker at 1.80 GHz) | 0.45–0.47 ms | 1.27–1.50 ms | 42.9–43.4 ms | 95.5–96.6 ms | 1384–1387 of 1435 | 45 of 50 | 82.0 |
   | On battery, E-cores (the worker at 2.20 GHz) | 0.41–0.42 ms | 1.15–1.18 ms | 60.3–60.4 ms | 98.6–98.8 ms | 734–752 of 1435 | 24 of 50 | 64.0–66.0 |
 
-  A key's work on the input thread stays within 2 ms at the 99th percentile while the model works, and within 0.5 ms on a P-core on AC power. A key's refinement feeds the model the reading's new kana, the tag after it and the whole draft again, as zenz's prompt puts the reading before the conversion: on a P-core on AC power it comes after 15.1 to 16.4 ms at the median, about the 15 ms that is the aim, every one before the next key, and on battery, whose cores keep a lower clock between keys, after about three times that. The same 50 items converted with no deadline are right for 42, as many as Space shows on a P-core on AC power.
+  A key's work on the input thread stays within 2 ms at the 99th percentile while the model works, and within 0.5 ms on a P-core on AC power. A key's refinement feeds the model the reading's new kana, the tag after it and the whole draft again, as zenz's prompt puts the reading before the conversion: on a P-core on AC power it comes after 16.4 to 16.6 ms at the median, about the 15 ms that is the aim, every one before the next key, and on battery, whose cores keep a lower clock between keys, after about three times that. The same 50 items converted with no deadline are right for 43, and Space shows 42 or 43 of them on a P-core on AC power.
 
 - The kernels in single precision (`kiral-kernels`): linear layers on weights packed in panels, layer normalization, GELU, softmax and attention over the cache, in plain Rust that the compiler turns into vector code. Each is tested against double precision, its error held to the bound that the analysis of its roundings gives, at lengths that are not multiples of the vectors' width.
 - The products in integers in assembly for AVX-VNNI (`crates/kiral-kernels/asm/x86_64/qgemm_avx_vnni.S`), the first form in assembly: tiles of one to six rows by sixteen columns, `vpdpbusd` adding four products of bytes to a lane, of three rows or fewer in two sets of sums so that twice the chains run side by side. Tested at every number of rows against double precision, as the portable form is, and run wherever the processor has AVX-VNNI and the environment allows it. With 16 to 40 rows, 179–205 GMAC/s on a P-core of the i7-1360P against the portable form's 8–10, and 46–48 on an E-core against 6.3–6.7 (`kiral-tools bench kernels`).
