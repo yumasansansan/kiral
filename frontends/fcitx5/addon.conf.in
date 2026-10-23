@@ -1,0 +1,22 @@
+# SPDX-FileCopyrightText: 2026 Yuma Kakei <yumasansansan@gmail.com>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# This file is part of KIRAL. The SPDX lines name its copyright holder and its
+# license, in the machine-readable form of the REUSE specification: the GNU
+# General Public License, version 3 or any later version
+# (LICENSES/GPL-3.0-or-later.txt).
+#
+# KIRAL's addon, as Fcitx 5's addon manager finds it: addon/kiral.conf in its
+# data directories, the library kiral.so in its addon directory.
+
+[Addon]
+Name=KIRAL
+Category=InputMethod
+Version=@PROJECT_VERSION@
+Library=kiral
+Type=SharedLibrary
+OnDemand=True
+Configurable=False
+
+[Addon/Dependencies]
+0=core:5.1.0

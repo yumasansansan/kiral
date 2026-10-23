@@ -23,7 +23,7 @@
 // Strings. A string given is UTF-8 and its length in bytes, a path a
 // NUL-terminated string. A string returned is UTF-8, its length in bytes given,
 // and NUL-terminated besides; it lives until the next call that changes the
-// session: kiral_session_key, _poll, _reset or _free.
+// session: kiral_session_key, _poll, _choose, _reset or _free.
 
 #ifndef KIRAL_H
 #define KIRAL_H
@@ -105,6 +105,10 @@ bool kiral_session_key(kiral_session *session, uint32_t key, uint32_t modifiers)
 // Takes the refinements that have come, without waiting: whether what the
 // session shows changed.
 bool kiral_session_poll(kiral_session *session);
+
+// Commits a candidate of the conversion, chosen otherwise than by a key --
+// clicked in the list: whether there was a conversion with so many.
+bool kiral_session_choose(kiral_session *session, size_t index);
 
 // Deletes what is typed and the left context: the input context lost its
 // focus, or its text changed under it.

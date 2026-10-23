@@ -439,6 +439,23 @@ pub unsafe extern "C" fn kiral_session_poll(session: *mut SessionHandle) -> bool
     unsafe { with_session(session, false, call) }
 }
 
+/// Commits a candidate of the conversion, chosen otherwise than by a key:
+/// whether there was a conversion with so many.
+///
+/// # Safety
+///
+/// As for [`kiral_session_key`].
+#[unsafe(no_mangle)]
+pub unsafe extern "C" fn kiral_session_choose(session: *mut SessionHandle, index: usize) -> bool {
+    let call = |session: &mut SessionHandle| {
+        let chosen = session.session.choose(index);
+        session.keep();
+        chosen
+    };
+    // SAFETY: NULL or a live session of this thread's, as the header asks.
+    unsafe { with_session(session, false, call) }
+}
+
 /// Deletes what is typed and the left context.
 ///
 /// # Safety

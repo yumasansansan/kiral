@@ -392,6 +392,22 @@ impl Session {
         came
     }
 
+    /// Commits a candidate of the conversion, chosen otherwise than by a key --
+    /// clicked in the list: whether there was a conversion with so many.
+    pub fn choose(&mut self, index: usize) -> bool {
+        self.commit.clear();
+        let Some(candidates) = &mut self.candidates else {
+            return false;
+        };
+        if index >= candidates.texts.len() {
+            return false;
+        }
+        candidates.selected = index;
+        self.commit_selected();
+        self.show();
+        true
+    }
+
     /// Deletes what is typed and the left context: the input context lost its
     /// focus, or its text changed under it.
     pub fn reset(&mut self) {

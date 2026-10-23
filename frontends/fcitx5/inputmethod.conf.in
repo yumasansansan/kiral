@@ -1,0 +1,17 @@
+# SPDX-FileCopyrightText: 2026 Yuma Kakei <yumasansansan@gmail.com>
+# SPDX-License-Identifier: GPL-3.0-or-later
+#
+# This file is part of KIRAL. The SPDX lines name its copyright holder and its
+# license, in the machine-readable form of the REUSE specification: the GNU
+# General Public License, version 3 or any later version
+# (LICENSES/GPL-3.0-or-later.txt).
+#
+# KIRAL's input method, as Fcitx 5 lists it: inputmethod/kiral.conf in its data
+# directories.
+
+[InputMethod]
+Name=KIRAL
+Label=あ
+LangCode=ja
+Addon=kiral
+Configurable=False

@@ -23,6 +23,10 @@
 # levels no runner can be counted on to have are tested under Intel's SDE, on
 # a machine of one's own (ci/emulated.sh).
 #
+# The fcitx5 job builds KIRAL's addon for Fcitx 5 with Clang, every warning an
+# error, against Ubuntu's Fcitx 5 development files, and runs its tests in a
+# Fcitx 5 of their own on Fcitx's test frontend (ci/fcitx5.sh).
+#
 # The python job checks scripts/ with ruff (ci/python.sh), and the reuse job
 # checks with reuse lint, from Ubuntu's reuse package, that every file names its
 # copyright holder and license (REUSE.toml, LICENSES/).
@@ -102,6 +106,35 @@ jobs:
 
       - name: Build for x86-64-v3 and v4, and test where the runner has them
         run: bash ci/targets.sh test
+
+  fcitx5:
+    name: fcitx5 (ubuntu-26.04)
+    runs-on: ubuntu-26.04
+    timeout-minutes: 60
+
+    steps:
+      - name: Check out
+        run: |
+          git config --global core.autocrlf false
+          git -c init.defaultBranch=main init --quiet
+          git remote add origin "$GITHUB_SERVER_URL/$GITHUB_REPOSITORY.git"
+          git fetch --no-tags --quiet --depth 1 origin "$GITHUB_SHA"
+          git checkout --quiet --detach "$GITHUB_SHA"
+          git log -1 --format='%H %s'
+
+      - name: Set up the toolchain
+        run: bash ci/setup.sh
+
+      - name: Install Fcitx 5's development files
+        run: |
+          # The headers, CMake's files and the test modules the addon and its
+          # tests are built against; CMake and Ninja to build them.
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq --no-install-recommends libfcitx5core-dev libfcitx5config-dev \
+            libfcitx5utils-dev fcitx5-modules-dev cmake ninja-build
+
+      - name: Build and test the addon
+        run: bash ci/fcitx5.sh
 
   python:
     name: python (ubuntu-26.04)

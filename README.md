@@ -138,6 +138,7 @@ So far, the harness that every later step is measured on:
   | E-cores (CPU 8, the worker on CPU 9) | 0.047–0.048 ms | 0.66 ms | 36.4–37.2 ms | 96.9–97.0 ms | 1272–1289 of 1385 | 42 of 50 | 82.0–84.0 |
 
   The clocks, read every 20 ms, are read mostly between keys, while the cores sleep: CPU 0 at 1.16–1.34 GHz at the median and the worker's CPU 2 at 1.64–2.00, CPU 8 at 0.40–2.01 and CPU 9 at 0.40–3.12; the package was at 85 and 88 °C as the runs began. The keys that complete no kana cost microseconds, and a key's work on the input thread stays under half a millisecond at the 99th percentile on a P-core while the model works, as a kana typed whole did (0.45–0.47 ms); a refinement comes 11.8 to 12.1 ms after its key at the median, every one before the next key, and Space shows 43 of the 50 right, the 43 the engine converts with no deadline.
+- KIRAL's addon for Fcitx 5 (`frontends/fcitx5/`): an input method engine of C++26 that translates between Fcitx 5 and KIRAL's C ABI, and does nothing else. It opens `kiral/dictionary.kdic` and, where there is one, `kiral/model.kmdl` from Fcitx's data directories, `~/.local/share/fcitx5` and then the system's -- without a model, the dictionary's drafts are all it shows -- and gives each input context a session. A key goes to the session, which says whether it took it; what the session commits, shows -- in the application's preedit where it draws one, in Fcitx's otherwise -- and offers goes to Fcitx, a candidate clicked in the list committed; the text before the cursor, where the application gives it, is the conversion's left context; keys pass in fields of passwords; and what is shown is committed as another input method takes the context. The session's wake-up, called on the engine's worker thread, schedules the input context's poll on Fcitx's thread, while the input context and the engine are there. Its tests run it in a Fcitx 5 of their own on Fcitx's test frontend, with a dictionary of three words that cargo writes for them (`kiral-capi`'s example `fixtures`): what kana shows as it is typed (可ｎ, then 仮名), what Enter, Space, a click and Escape commit, what another input method's taking commits, and, with a small model of random weights, that a refinement reaches the input panel from the worker. With the dictionary of Mozc's and SudachiDict's core nouns and zenz-v3.1-small, `kyouhaiitenkidesune.` typed into it a key every 100 ms shows and commits 今日はいい天気ですね。.
 - The kernels in single precision (`kiral-kernels`): linear layers on weights packed in panels, layer normalization, GELU, softmax and attention over the cache, in plain Rust that the compiler turns into vector code. Each is tested against double precision, its error held to the bound that the analysis of its roundings gives, at lengths that are not multiples of the vectors' width. The exponential that GELU and the softmax take is computed there too -- the argument less its nearest multiple of ln 2, Cephes' polynomial for what is left, the power of two put in the exponent's bits -- within 1.42 u of double precision on every float of its range (u = 2^-24), so that their loops become vector code as well: taken from the system's library a value at a time, GELU's hyperbolic tangent was a sixth of a key's refinement on a P-core. GELU is computed as `x / (1 + exp(-2z))`, which `x (1 + tanh z) / 2` equals. The inputs of the products in integers are quantized by comparisons and by adding 2^23, which rounds them, in a third of the time that rounding by `round_ties_even` and a saturating conversion took, to the same bytes. `kiral-tools bench kernels` times each.
 - The products in integers in assembly for AVX-VNNI (`crates/kiral-kernels/asm/x86_64/qgemm_avx_vnni.S`), the first form in assembly: tiles of one to six rows by sixteen columns, `vpdpbusd` adding four products of bytes to a lane, of three rows or fewer in two sets of sums so that twice the chains run side by side. Tested at every number of rows against double precision, as the portable form is, and run wherever the processor has AVX-VNNI and the environment allows it. For the output layer, each row keeps only its largest sum as the tiles come (`quantized::likeliest`), the logits of 6000 words never written out: what verification takes of them. With 16 to 40 rows, 179–205 GMAC/s on a P-core of the i7-1360P against the portable form's 8–10, and 46–48 on an E-core against 6.3–6.7 (`kiral-tools bench kernels`).
 - The products for AVX2 without VNNI (`qgemm_avx2.S`), for the processors before AVX-VNNI and AVX-512's VNNI (Haswell to Comet Lake, Zen to Zen 3): `vpmaddubsw` sums two products of an input's byte by a weight's in a word, which two of 255 by 127 would pass, so that the inputs are quantized to seven bits for this form, the weights kept at eight -- one model file for every form, mapped as it lies -- and `vpmaddwd` by ones sums the words into the lanes `vpdpbusd` would. With 16 or 40 rows, 102–111 GMAC/s on a P-core of the i7-1360P and 23–26 on an E-core, 0.55 of AVX-VNNI's, against the portable form's 8–9 and 6.4–6.7; on a processor it is for, the AMD EPYC 7763 (Zen 3) of a CI runner, 79–84 with 4 to 40 rows against 6.6–6.8 (unpinned). The inputs of seven bits cost zenz-v3.1-small one item of AJIMEE-Bench (Acc@1 86.5, CER 1.60, 4395 of the 4396 positions agreeing with single precision, as with eight bits) and the engine the same item (86.0 with as many rounds as it takes). Held to this form on the same machine (`KIRAL_ISA=avx2`), a key's refinement typed live comes 17.5 to 18.1 ms after the key at the median on a P-core, every one before the next, against 12.5 to 12.8 with AVX-VNNI.
@@ -161,6 +162,38 @@ bash ci/rust.sh
 ```
 
 `ci/rust.sh` checks the layout and clippy (every warning an error) and runs the tests in the dev and release profiles. The build leaves KIRAL's C ABI in a static library, `target/release/libkiral_capi.a` (`kiral_capi.lib` on Windows), which `crates/kiral-capi/include/kiral.h` declares. `bash ci/targets.sh test` builds the workspace for x86-64-v3 and for x86-64-v4 with vectors of 512 bits, and tests each where the processor has it; `bash ci/emulated.sh <sde64>` runs the tests under [Intel SDE](https://www.intel.com/content/www/us/en/developer/articles/tool/software-development-emulator.html) as processors from Nehalem to Arrow Lake.
+
+KIRAL's addon for Fcitx 5 is built by CMake and Clang against Fcitx 5's development files -- on Ubuntu, `libfcitx5core-dev`, `libfcitx5config-dev`, `libfcitx5utils-dev` and `fcitx5-modules-dev` -- cargo building the C ABI beside it in the build's directory; `bash ci/fcitx5.sh` builds it and runs its tests:
+
+```bash
+cmake -S frontends/fcitx5 -B build/fcitx5 -G Ninja -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+```
+
+```bash
+cmake --build build/fcitx5
+```
+
+```bash
+ctest --test-dir build/fcitx5
+```
+
+```bash
+sudo cmake --install build/fcitx5
+```
+
+Installed in Fcitx's own directories, which `CMAKE_INSTALL_PREFIX` set to Fcitx's prefix makes them, KIRAL is added as an input method in Fcitx's configuration, once Fcitx has restarted; its dictionary and model go in Fcitx's data directory:
+
+```bash
+mkdir -p ~/.local/share/fcitx5/kiral
+```
+
+```bash
+cp data/dictionaries/mozc-sudachi.kdic ~/.local/share/fcitx5/kiral/dictionary.kdic
+```
+
+```bash
+cp data/models/zenz-v3.1-small-int8.kmdl ~/.local/share/fcitx5/kiral/model.kmdl
+```
 
 ## Measuring
 

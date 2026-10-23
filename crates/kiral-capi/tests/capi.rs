@@ -29,9 +29,9 @@ use common::{Random, dictionary, model_file};
 use kiral_capi::{
     EngineHandle, KIRAL_KEY_F1, KIRAL_KEY_SPACE, SessionHandle, key_of, kiral_engine_close, kiral_engine_open,
     kiral_session_candidate, kiral_session_candidate_selected, kiral_session_candidates,
-    kiral_session_candidates_shown, kiral_session_commit, kiral_session_free, kiral_session_key, kiral_session_new,
-    kiral_session_poll, kiral_session_preedit, kiral_session_preedit_cursor, kiral_session_preedit_highlight,
-    kiral_session_reset, kiral_session_set_context, kiral_session_set_notify,
+    kiral_session_candidates_shown, kiral_session_choose, kiral_session_commit, kiral_session_free, kiral_session_key,
+    kiral_session_new, kiral_session_poll, kiral_session_preedit, kiral_session_preedit_cursor,
+    kiral_session_preedit_highlight, kiral_session_reset, kiral_session_set_context, kiral_session_set_notify,
 };
 use kiral_engine::session::{Key, Modifiers};
 
@@ -103,7 +103,7 @@ fn functions(text: &str, rust: bool) -> BTreeSet<String> {
 #[test]
 fn the_header_declares_what_the_library_defines() {
     let declared = functions(HEADER, false);
-    assert_eq!(declared.len(), 17, "{declared:?}");
+    assert_eq!(declared.len(), 18, "{declared:?}");
     assert_eq!(declared, functions(LIBRARY, true));
     // The keys' codes, in the header's order from KIRAL_KEY_SPACE on.
     let names: Vec<&str> = HEADER
@@ -283,6 +283,13 @@ fn an_engine_without_a_model_types_converts_and_commits() {
     assert!(unsafe { kiral_session_candidate(session, texts.len(), &raw mut length) }.is_null());
     assert!(key(session, KIRAL_KEY_SPACE + 1), "Enter");
     assert_eq!(commit(session), texts[1]);
+    typed(session, "kana");
+    assert!(key(session, KIRAL_KEY_SPACE));
+    // SAFETY: a live session of this thread's.
+    assert!(!unsafe { kiral_session_choose(session, texts.len()) });
+    // SAFETY: as above.
+    assert!(unsafe { kiral_session_choose(session, 2) });
+    assert_eq!(commit(session), texts[2]);
     assert_eq!(preedit(session), "");
     // SAFETY: a live session.
     assert_eq!(unsafe { kiral_session_candidates(session) }, 0);

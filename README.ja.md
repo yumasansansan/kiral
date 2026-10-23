@@ -136,6 +136,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
   クロックは 20 ms ごとに読みますが，その多くはコアが眠っているキーの間に読んだものです（CPU 0 の中央値は 1.16〜1.34 GHz，ワーカーの CPU 2 は 1.64〜2.00，CPU 8 は 0.40〜2.01，CPU 9 は 0.40〜3.12）．計測の始めのパッケージの温度は 85 °C と 88 °C でした．かなを完成させないキーは数マイクロ秒で済みます．モデルが働いている間も，P コアでの入力スレッドのキーの処理は 99 パーセンタイルで 0.5 ms を下回り，かなをまるごと打っていたとき（0.45〜0.47 ms）と変わりません．精緻化はキーから中央値 11.8〜12.1 ms で届き，どれも次のキーより前です．Space は 50 項目中 43 を正しく表示し，これはエンジンが締め切りなしで正しく変換する 43 項目と同じです．
 
+- KIRAL の Fcitx 5 アドオン（`frontends/fcitx5/`）：Fcitx 5 と KIRAL の C ABI の間を取り次ぐだけの，C++26 の入力メソッドエンジンです．Fcitx のデータディレクトリ（`~/.local/share/fcitx5`，次にシステムのもの）から `kiral/dictionary.kdic` と，あれば `kiral/model.kmdl` を開き（モデルがなければ辞書の下書きだけを表示します），入力コンテキストごとにセッションを持たせます．キーはセッションに渡し，セッションが受け取ったかどうかを返します．セッションが確定・表示・提示するものは Fcitx に渡します．表示はアプリケーションが preedit を描くならそこに，描かないなら Fcitx の preedit に出し，一覧で候補をクリックすると確定します．アプリケーションがカーソルの前の文字列を与えるなら，それを変換の左文脈にします．パスワードの欄ではキーを素通しし，別の入力メソッドがコンテキストを取るときは表示中のものを確定します．セッションの起床通知はエンジンのワーカースレッドで呼ばれ，入力コンテキストとエンジンがまだあるうちに，Fcitx のスレッドで入力コンテキストの poll を予定します．テストでは，cargo がテスト用に書き出す 3 語の辞書（`kiral-capi` の example `fixtures`）で，Fcitx のテスト用フロントエンドの上の専用の Fcitx 5 で動かします．確かめるのは，かなを打つそばからの表示（可ｎ，次に 仮名），Enter・Space・クリック・Escape で確定されるもの，別の入力メソッドがコンテキストを取るときに確定されるもの，そして乱数の重みの小さなモデルで，精緻化がワーカーから入力パネルに届くことです．Mozc と SudachiDict の core の名詞による辞書と zenz-v3.1-small で，`kyouhaiitenkidesune.` を 100 ms ごとに 1 キー打つと，今日はいい天気ですね。と表示して確定します．
 - 単精度のカーネル（`kiral-kernels`）：パネルにパックした重みによる線形層，LayerNorm，GELU，softmax，キャッシュに対する attention を，コンパイラがベクトル化するシンプルな Rust で書いています．どれも倍精度と比べてテストし，誤差を丸めの解析から導いた上界に収めています．長さはベクトルの幅の倍数でないものを使います．GELU と softmax が使う指数関数もここで計算します（引数から最も近い ln 2 の倍数を引き，残りを Cephes の多項式で求め，2 の冪は指数部のビットに置きます）．値域のすべての浮動小数点数で倍精度との差は 1.42 u 以内（u = 2^-24）で，これらのループもベクトル化されます．システムのライブラリから 1 値ずつ取っていたときは，GELU の tanh が P コアでのキーの精緻化の 6 分の 1 を占めていました．GELU は `x (1 + tanh z) / 2` と等しい `x / (1 + exp(-2z))` として計算します．整数の積の入力は比較と 2^23 の加算（これが丸めになります）で量子化し，`round_ties_even` と飽和する変換で丸めていたときの 3 分の 1 の時間で同じバイトになります．それぞれ `kiral-tools bench kernels` で測れます．
 - AVX-VNNI のアセンブリによる整数の積（`crates/kiral-kernels/asm/x86_64/qgemm_avx_vnni.S`）．最初のアセンブリの形です．1〜6 行×16 列のタイルで，`vpdpbusd` がバイトの積 4 つを 1 レーンに足します．3 行以下では和を 2 組に分け，2 倍の連鎖を並べて走らせます．可搬な形と同じく行数ごとに倍精度と比べてテストし，プロセッサが AVX-VNNI を持ち環境が許すところで使います．出力層では，各行はタイルが来るたびに最大の和だけを残し（`quantized::likeliest`），6000 語のロジットは書き出しません．検証が使うのはそれだけだからです．16〜40 行で，i7-1360P の P コアで 179〜205 GMAC/s（可搬な形は 8〜10），E コアで 46〜48（可搬な形は 6.3〜6.7）です（`kiral-tools bench kernels`）．
 - VNNI のない AVX2 向けの積（`qgemm_avx2.S`）．AVX-VNNI や AVX-512 の VNNI より前のプロセッサ（Haswell〜Comet Lake，Zen〜Zen 3）のための形です．`vpmaddubsw` は入力のバイトと重みのバイトの積 2 つを 16 ビットに足しますが，255×127 が 2 つでは溢れるので，この形では入力を 7 ビットに量子化し，重みは 8 ビットのままにします（どの形にもモデルファイルは 1 つで，マップしたまま使えます）．`vpmaddwd` で 1 を掛けて，`vpdpbusd` と同じ 32 ビットのレーンにまとめます．16 行か 40 行で，i7-1360P の P コアで 102〜111 GMAC/s，E コアで 23〜26 で，AVX-VNNI の 0.55 倍です（可搬な形は 8〜9 と 6.4〜6.7）．本来の対象のプロセッサである CI のランナーの AMD EPYC 7763（Zen 3）では，4〜40 行で 79〜84 です（可搬な形は 6.6〜6.8．固定なし）．入力を 7 ビットにすると，zenz-v3.1-small は AJIMEE-Bench で 1 項目を失い（Acc@1 86.5，CER 1.60．単精度との一致は 8 ビットと同じく 4396 位置のうち 4395），エンジンも同じ 1 項目を失います（往復の上限なしで 86.0）．同じマシンでこの形に抑えると（`KIRAL_ISA=avx2`），打ちながらの精緻化は P コアで中央値 17.5〜18.1 ms で届き，すべて次のキーより前です（AVX-VNNI では 12.5〜12.8 ms）．
@@ -159,6 +160,38 @@ bash ci/rust.sh
 ```
 
 `ci/rust.sh` はレイアウトと clippy（警告はすべてエラー）を検査し，dev と release の両プロファイルでテストを実行します．ビルドは KIRAL の C ABI を静的ライブラリ `target/release/libkiral_capi.a`（Windows では `kiral_capi.lib`）に残し，`crates/kiral-capi/include/kiral.h` がそれを宣言します．`bash ci/targets.sh test` は x86-64-v3 向けと，512 ビット幅のベクトルの x86-64-v4 向けにワークスペースをビルドし，プロセッサが対応していればそれぞれテストします．`bash ci/emulated.sh <sde64>` は，[Intel SDE](https://www.intel.com/content/www/us/en/developer/articles/tool/software-development-emulator.html) の下で Nehalem から Arrow Lake までのプロセッサとしてテストを実行します．
+
+KIRAL の Fcitx 5 アドオンは，Fcitx 5 の開発用ファイル（Ubuntu では `libfcitx5core-dev`，`libfcitx5config-dev`，`libfcitx5utils-dev`，`fcitx5-modules-dev`）を使って CMake と Clang でビルドします．C ABI は cargo がビルドディレクトリの中でビルドします．`bash ci/fcitx5.sh` はビルドしてテストを実行します：
+
+```bash
+cmake -S frontends/fcitx5 -B build/fcitx5 -G Ninja -DCMAKE_CXX_COMPILER=clang++ -DCMAKE_BUILD_TYPE=Release -DCMAKE_INSTALL_PREFIX=/usr
+```
+
+```bash
+cmake --build build/fcitx5
+```
+
+```bash
+ctest --test-dir build/fcitx5
+```
+
+```bash
+sudo cmake --install build/fcitx5
+```
+
+`CMAKE_INSTALL_PREFIX` を Fcitx と同じプレフィックスにして Fcitx 自身のディレクトリにインストールすると，Fcitx を再起動したあと，Fcitx の設定で KIRAL を入力メソッドとして追加できます．辞書とモデルは Fcitx のデータディレクトリに置きます：
+
+```bash
+mkdir -p ~/.local/share/fcitx5/kiral
+```
+
+```bash
+cp data/dictionaries/mozc-sudachi.kdic ~/.local/share/fcitx5/kiral/dictionary.kdic
+```
+
+```bash
+cp data/models/zenz-v3.1-small-int8.kmdl ~/.local/share/fcitx5/kiral/model.kmdl
+```
 
 ## 計測
 

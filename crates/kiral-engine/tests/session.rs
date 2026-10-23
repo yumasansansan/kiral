@@ -207,6 +207,15 @@ fn a_character_during_a_conversion_commits_it_and_a_digit_chooses() {
     typed(&mut session, "3");
     assert_eq!(session.commit(), texts[2]);
     assert!(session.candidates().is_none() && session.preedit().text.is_empty());
+    // A candidate chosen otherwise than by a key -- clicked -- commits too.
+    assert!(!session.choose(0), "no conversion");
+    typed(&mut session, "kana");
+    assert!(key(&mut session, Key::Space));
+    let texts = session.candidates().expect("candidates").texts.clone();
+    assert!(!session.choose(texts.len()));
+    assert!(session.choose(texts.len() - 1));
+    assert_eq!(session.commit(), texts[texts.len() - 1]);
+    assert!(session.candidates().is_none() && session.preedit().text.is_empty());
 }
 
 #[test]

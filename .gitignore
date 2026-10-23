@@ -6,8 +6,9 @@
 # General Public License, version 3 or any later version
 # (LICENSES/GPL-3.0-or-later.txt).
 
-# Build trees
+# Build trees: cargo's, and CMake's for the frontends (build/fcitx5)
 target/
+/build/
 
 # What scripts/fetch_datasets.py fetches: the benchmark and the models, under
 # their own terms, never committed
